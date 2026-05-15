@@ -1,0 +1,19 @@
+[package]
+name        = "hr-service"
+version     = "0.1.0"
+edition     = "2021"
+description = "HR Service contract — manages employee records"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+chain-sdk        = { workspace = true }
+qorvum-contracts = { workspace = true }
+qorvum-crypto    = { workspace = true }
+serde            = { workspace = true }
+serde_json       = { workspace = true }
+anyhow           = { workspace = true }
+
+[dev-dependencies]
+qorvum-ledger = { workspace = true }

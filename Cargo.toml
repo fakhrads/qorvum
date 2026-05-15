@@ -1,0 +1,78 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "crates/qorvum-crypto",
+    "crates/qorvum-ledger",
+    "crates/chain-sdk",
+    "crates/qorvum-contracts",
+    "crates/qorvum-gateway",
+    "crates/qorvum-cli",
+    "crates/qorvum-node",
+    "crates/qorvum-network",
+    "crates/qorvum-consensus",
+    "crates/qorvum-msp",
+    "contracts/hr-service",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Fakhri Adi Saputra <fakhriadisaputra15@gmail.com>"]
+license = "Apache-2.0"
+
+[workspace.dependencies]
+# Internal Crates
+qorvum-crypto    = { path = "crates/qorvum-crypto" }
+qorvum-ledger    = { path = "crates/qorvum-ledger" }
+qorvum-contracts = { path = "crates/qorvum-contracts" }
+qorvum-consensus = { path = "crates/qorvum-consensus" }
+qorvum-network   = { path = "crates/qorvum-network" }
+qorvum-msp       = { path = "crates/qorvum-msp" }
+chain-sdk        = { path = "crates/chain-sdk" }
+hr-service       = { path = "contracts/hr-service" }
+
+# Common Dependencies
+anyhow    = "1.0"
+thiserror = "1.0"
+serde     = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+bincode   = "1.3"
+bytes     = "1.5"
+tokio     = { version = "1.36", features = ["full"] }
+axum      = "0.7.4"
+tower     = "0.4"
+hyper     = "1.0"
+tonic     = "0.11"
+reqwest   = { version = "0.11", features = ["json"] }
+libp2p    = { version = "0.53", features = ["tokio", "tcp", "yamux", "gossipsub", "mdns", "macros"] }
+futures   = "0.3"
+tracing   = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap      = { version = "4.5", features = ["derive", "env"] }
+uuid      = { version = "1.7", features = ["v4", "serde"] }
+chrono    = { version = "0.4", features = ["serde"] }
+hex       = "0.4"
+rand      = "0.8"
+rand_core = "0.6"
+config    = "0.14"
+
+# Crypto & Runtime
+blake3    = "1.5"
+zeroize   = { version = "1.7", features = ["derive"] }
+subtle    = "2.5"
+rocksdb   = "0.21"
+wasmtime  = "16.0"
+pqcrypto-dilithium   = "0.5"
+pqcrypto-kyber       = "0.7"
+pqcrypto-falcon      = "0.4"
+pqcrypto-sphincsplus = "0.5"
+pqcrypto-traits      = "0.3"
+
+# Phase 4 additions
+aes-gcm       = "0.10"
+x25519-dalek  = { version = "2", features = ["static_secrets"] }
+base64        = "0.21"
+rpassword     = "7"
+comfy-table   = "7"

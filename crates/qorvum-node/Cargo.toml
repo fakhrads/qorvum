@@ -1,0 +1,33 @@
+[package]
+name        = "qorvum-node"
+version     = "0.1.0"
+edition     = "2021"
+description = "Qorvum peer node binary — role-based architecture"
+license = "Apache-2.0"
+
+[[bin]]
+name = "qorvum-node"
+path = "src/main.rs"
+
+[dependencies]
+qorvum-crypto    = { workspace = true }
+qorvum-ledger    = { workspace = true }
+qorvum-consensus = { workspace = true }
+qorvum-network   = { workspace = true }
+qorvum-msp       = { workspace = true }
+qorvum-contracts = { workspace = true }
+qorvum-gateway   = { path = "../qorvum-gateway" }
+axum       = "0.7.4"
+hr-service = { path = "../../contracts/hr-service" }
+tokio    = { workspace = true }
+config   = { workspace = true }
+serde    = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+anyhow   = { workspace = true }
+bincode  = { workspace = true }
+hex      = { workspace = true }
+tracing  = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap     = { workspace = true }
+futures  = { workspace = true }

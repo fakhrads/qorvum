@@ -1,0 +1,37 @@
+[package]
+name        = "qorvum-gateway"
+version     = "0.1.0"
+edition     = "2021"
+description = "REST API Gateway for Qorvum"
+license = "Apache-2.0"
+
+[lib]
+name = "qorvum_gateway"
+path = "src/lib.rs"
+
+[dependencies]
+qorvum-crypto     = { workspace = true }
+qorvum-ledger     = { workspace = true, features = ["rocksdb-store"] }
+qorvum-contracts  = { workspace = true }
+qorvum-consensus  = { workspace = true }
+qorvum-msp        = { workspace = true }
+chain-sdk         = { workspace = true }
+hr-service        = { path = "../../contracts/hr-service" }
+tokio             = { workspace = true }
+tokio-stream      = { version = "0.1", features = ["sync"] }
+axum              = { version = "=0.7.4", features = ["macros", "ws"] }
+tower             = { workspace = true }
+tower-http        = { version = "=0.5.2", features = ["cors", "trace"] }
+hyper             = { workspace = true }
+futures           = { workspace = true }
+serde             = { workspace = true }
+serde_json        = { workspace = true }
+anyhow            = { workspace = true }
+thiserror         = { workspace = true }
+tracing           = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap              = { workspace = true }
+uuid              = { workspace = true }
+chrono            = { workspace = true }
+hex               = { workspace = true }
+bincode           = { workspace = true }

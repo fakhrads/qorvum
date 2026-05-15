@@ -1,0 +1,28 @@
+[package]
+name        = "qorvum-cli"
+version     = "0.1.0"
+edition     = "2021"
+description = "qv — Qorvum CLI tool"
+license = "Apache-2.0"
+
+[[bin]]
+name = "qv"
+path = "src/main.rs"
+
+[dependencies]
+qorvum-msp = { workspace = true }
+qorvum-crypto = { workspace = true }   
+clap       = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+anyhow     = { workspace = true }
+tracing    = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio      = { workspace = true }
+hex        = { workspace = true }
+bincode    = { workspace = true }
+chrono     = { workspace = true }
+reqwest    = { version = "0.11", features = ["json"] }
+rpassword  = { workspace = true }
+comfy-table = { workspace = true }

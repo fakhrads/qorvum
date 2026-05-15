@@ -1,0 +1,10 @@
+/target
+/target/*
+.DS_Store
+.env
+*.log
+/data
+.qodo
+.claude
+.idea
+.vscode

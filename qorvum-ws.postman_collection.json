@@ -1,0 +1,115 @@
+{
+	"info": {
+		"_postman_id": "b2c3d4e5-f6a7-4b5c-9d0e-1f2a3b4c5d6e",
+		"name": "Qorvum WebSocket Stream",
+		"description": "WebSocket real-time stream untuk Qorvum Blockchain Explorer.\n\n## Setup\n1. Import koleksi HTTP dulu: `qorvum.postman_collection.json`\n2. Hit **Authentication > Login** untuk mendapat token\n3. Import file ini, lalu buka salah satu request di bawah\n4. Klik **Connect**\n\n## Token\nToken dari koleksi HTTP tersimpan di collection variable `token`.\nPaste manual ke URL WebSocket: `ws://localhost:8080/api/v1/ws?token=<token>`\n\n## Topik\n- `blocks` — setiap block baru yang di-commit\n- `tx` — setiap transaksi yang dieksekusi\n- `node_status` — status peer / leader HotStuff\n- `heartbeat` — keepalive tiap 30 detik",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "wsHost",
+			"value": "localhost:8080",
+			"type": "string",
+			"description": "Host:port node Qorvum"
+		},
+		{
+			"key": "token",
+			"value": "",
+			"type": "string",
+			"description": "Bearer token — copy dari koleksi HTTP setelah Login"
+		}
+	],
+	"item": [
+		{
+			"name": "Connect — All Topics",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "ws://{{wsHost}}/api/v1/ws?token={{token}}",
+					"protocol": "ws",
+					"host": ["{{wsHost}}"],
+					"path": ["api", "v1", "ws"],
+					"query": [
+						{
+							"key": "token",
+							"value": "{{token}}",
+							"description": "Bearer token (WS API tidak support custom header)"
+						}
+					]
+				},
+				"description": "Connect ke semua topik sekaligus.\n\nSetelah **Connect**, server langsung kirim:\n```json\n{\"type\":\"connected\",\"data\":{\"channel\":\"default\",\"latest_block\":42,\"mode\":\"dev\"}}\n```\n\nSemua topik aktif by default. Untuk subscribe selektif, kirim:\n```json\n{\"type\":\"unsubscribe\",\"topics\":[\"node_status\",\"heartbeat\"]}\n```"
+			},
+			"response": [],
+			"protocolProfileBehavior": {
+				"disabledSystemHeaders": {}
+			}
+		},
+		{
+			"name": "Connect — Blocks + TX Only",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "ws://{{wsHost}}/api/v1/ws?token={{token}}",
+					"protocol": "ws",
+					"host": ["{{wsHost}}"],
+					"path": ["api", "v1", "ws"],
+					"query": [
+						{
+							"key": "token",
+							"value": "{{token}}"
+						}
+					]
+				},
+				"description": "Connect lalu unsubscribe event yang tidak dibutuhkan.\n\nSetelah Connect, kirim secara berurutan:\n\n**1. Unsubscribe heartbeat + node_status:**\n```json\n{\"type\":\"unsubscribe\",\"topics\":[\"node_status\",\"heartbeat\"]}\n```\n\n**2. Cek topik aktif (opsional — kirim ping):**\n```json\n{\"type\":\"ping\"}\n```\n\nSekarang hanya event `block` dan `tx` yang masuk."
+			},
+			"response": [],
+			"protocolProfileBehavior": {
+				"disabledSystemHeaders": {}
+			}
+		},
+		{
+			"name": "Connect — Dev Mode (tanpa token)",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "ws://{{wsHost}}/api/v1/ws",
+					"protocol": "ws",
+					"host": ["{{wsHost}}"],
+					"path": ["api", "v1", "ws"]
+				},
+				"description": "Connect tanpa token — untuk dev mode (node tanpa CA/MSP).\nEndpoint `/api/v1/ws` adalah public route, token opsional.\n\nSetelah Connect, kirim ping untuk verifikasi:\n```json\n{\"type\":\"ping\"}\n```\n\nExpected response:\n```json\n{\"type\":\"pong\"}\n```"
+			},
+			"response": [],
+			"protocolProfileBehavior": {
+				"disabledSystemHeaders": {}
+			}
+		},
+		{
+			"name": "Connect — Node Status Only",
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "ws://{{wsHost}}/api/v1/ws?token={{token}}",
+					"protocol": "ws",
+					"host": ["{{wsHost}}"],
+					"path": ["api", "v1", "ws"],
+					"query": [
+						{
+							"key": "token",
+							"value": "{{token}}"
+						}
+					]
+				},
+				"description": "Connect khusus monitor status peer / HotStuff consensus.\n\nSetelah Connect, unsubscribe topik lain:\n```json\n{\"type\":\"unsubscribe\",\"topics\":[\"blocks\",\"tx\",\"heartbeat\"]}\n```\n\nEvent yang masuk:\n```json\n{\"type\":\"node_status\",\"data\":{\"status\":\"ok\",\"peer_count\":3,\"leader\":\"node-1\"}}\n```\n\nSnapshot node_status langsung dikirim saat connect — tidak perlu tunggu event berikutnya."
+			},
+			"response": [],
+			"protocolProfileBehavior": {
+				"disabledSystemHeaders": {}
+			}
+		}
+	]
+}

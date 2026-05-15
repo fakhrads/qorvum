@@ -1,0 +1,654 @@
+{
+	"info": {
+		"_postman_id": "a1b2c3d4-e5f6-4a5b-8c9d-0e1f2a3b4c5d",
+		"name": "Qorvum Ledger API",
+		"description": "Collection for Qorvum Post-Quantum Blockchain API Gateway.\n\n## Auto-Login\nPre-request script otomatis login sebelum request ke endpoint protected.\nAtur `username` dan `password` di collection variables, lalu langsung hit endpoint manapun.\n\n## Authentication\n- Production: Bearer token via PQ-MSP (`QorvumToken`)\n- Dev mode (tanpa CA): gunakan header `X-Identity` + `X-Roles` (ada di tiap request, disabled by default)\n\n## WebSocket (Real-time Stream)\nKoneksi: `ws://localhost:8080/api/v1/ws?token={{token}}`\nTopik: `blocks`, `tx`, `node_status`, `heartbeat`\n\n## Base URL\n`http://localhost:8080/api/v1`",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{token}}",
+				"type": "string"
+			}
+		]
+	},
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					"// ── Qorvum Auto-Login ────────────────────────────────────────────────────",
+					"// Skip untuk endpoint public agar tidak infinite loop",
+					"const url = pm.request.url.toString();",
+					"const skipPaths = ['/auth/login', '/auth/bootstrap', '/health', '/stats'];",
+					"if (skipPaths.some(p => url.includes(p))) return;",
+					"",
+					"// Cek apakah token masih valid (buffer 60 detik)",
+					"const token  = pm.collectionVariables.get('token');",
+					"const expiry = parseInt(pm.collectionVariables.get('tokenExpiry') || '0');",
+					"const now    = Math.floor(Date.now() / 1000);",
+					"if (token && expiry > now + 60) return;",
+					"",
+					"// Token tidak ada / expired → auto-login",
+					"const baseUrl  = pm.collectionVariables.get('baseUrl');",
+					"const username = pm.collectionVariables.get('username');",
+					"const password = pm.collectionVariables.get('password');",
+					"",
+					"if (!username || !password) {",
+					"    console.warn('[Qorvum] Set collection variables `username` and `password` to enable auto-login.');",
+					"    return;",
+					"}",
+					"",
+					"pm.sendRequest({",
+					"    url:    baseUrl + '/auth/login',",
+					"    method: 'POST',",
+					"    header: [{ key: 'Content-Type', value: 'application/json' }],",
+					"    body: {",
+					"        mode: 'raw',",
+					"        raw: JSON.stringify({ username: username, password: password })",
+					"    }",
+					"}, function(err, res) {",
+					"    if (err) {",
+					"        console.error('[Qorvum] Auto-login error:', err);",
+					"        return;",
+					"    }",
+					"    const data = res.json();",
+					"    if (data.success && data.data && data.data.token) {",
+					"        pm.collectionVariables.set('token',       data.data.token);",
+					"        pm.collectionVariables.set('tokenExpiry', String(data.data.expires_at));",
+					"        console.log('[Qorvum] Auto-login OK — token valid until',",
+					"            new Date(data.data.expires_at * 1000).toISOString());",
+					"    } else {",
+					"        console.error('[Qorvum] Auto-login failed:', JSON.stringify(data));",
+					"    }",
+					"});"
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [""]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:8080/api/v1",
+			"type": "string"
+		},
+		{
+			"key": "host",
+			"value": "localhost:8080",
+			"type": "string"
+		},
+		{
+			"key": "username",
+			"value": "admin",
+			"type": "string",
+			"description": "Username untuk auto-login"
+		},
+		{
+			"key": "password",
+			"value": "admin1234",
+			"type": "string",
+			"description": "Password untuk auto-login"
+		},
+		{
+			"key": "token",
+			"value": "",
+			"type": "string",
+			"description": "Diisi otomatis oleh pre-request script / Login request"
+		},
+		{
+			"key": "tokenExpiry",
+			"value": "0",
+			"type": "string",
+			"description": "Unix timestamp (detik) expiry token — digunakan pre-request script"
+		},
+		{
+			"key": "wsUrl",
+			"value": "ws://localhost:8080/api/v1/ws",
+			"type": "string",
+			"description": "WebSocket base URL — copy ke Postman New > WebSocket Request"
+		}
+	],
+	"item": [
+		{
+			"name": "Health & Stats",
+			"item": [
+				{
+					"name": "Health Check",
+					"request": {
+						"auth": { "type": "noauth" },
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/health",
+							"host": ["{{baseUrl}}"],
+							"path": ["health"]
+						},
+						"description": "Status node: channel, latest block, mode (dev/consensus), versi. Public — tidak butuh token."
+					},
+					"response": []
+				},
+				{
+					"name": "Stats",
+					"request": {
+						"auth": { "type": "noauth" },
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/stats",
+							"host": ["{{baseUrl}}"],
+							"path": ["stats"]
+						},
+						"description": "Block height, mode, versi. Public — tidak butuh token."
+					},
+					"response": []
+				},
+				{
+					"name": "List Contracts",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "X-Identity", "value": "admin@Org1", "description": "Dev mode only", "disabled": true },
+							{ "key": "X-Roles",    "value": "ADMIN",       "description": "Dev mode only", "disabled": true }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/contracts",
+							"host": ["{{baseUrl}}"],
+							"path": ["contracts"]
+						},
+						"description": "Daftar chaincode yang terdeploy di node ini."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Authentication",
+			"item": [
+				{
+					"name": "Bootstrap Admin (sekali pakai)",
+					"request": {
+						"auth": { "type": "noauth" },
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"username\": \"admin\",\n    \"password\": \"admin1234\",\n    \"org\": \"Org1\"\n}",
+							"options": { "raw": { "language": "json" } }
+						},
+						"url": {
+							"raw": "{{baseUrl}}/auth/bootstrap",
+							"host": ["{{baseUrl}}"],
+							"path": ["auth", "bootstrap"]
+						},
+						"description": "Enroll admin pertama — hanya berhasil jika belum ada user sama sekali (UserStore kosong).\nSetelah ada user, endpoint ini otomatis mengembalikan 400.\n\nRoles yang di-assign: `ADMIN`, `HR_MANAGER`."
+					},
+					"response": []
+				},
+				{
+					"name": "Login",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"const res = pm.response.json();",
+									"if (res.success && res.data && res.data.token) {",
+									"    pm.collectionVariables.set('token',       res.data.token);",
+									"    pm.collectionVariables.set('tokenExpiry', String(res.data.expires_at));",
+									"    console.log('[Qorvum] Token saved, expires at',",
+									"        new Date(res.data.expires_at * 1000).toISOString());",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"auth": { "type": "noauth" },
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"username\": \"{{username}}\",\n    \"password\": \"{{password}}\",\n    \"ttl\": 3600\n}",
+							"options": { "raw": { "language": "json" } }
+						},
+						"url": {
+							"raw": "{{baseUrl}}/auth/login",
+							"host": ["{{baseUrl}}"],
+							"path": ["auth", "login"]
+						},
+						"description": "Returns Bearer token (PQ-signed `QorvumToken`).\nTest script otomatis menyimpan `token` dan `tokenExpiry` ke collection variables."
+					},
+					"response": []
+				},
+				{
+					"name": "Refresh Token",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"ttl\": 7200\n}",
+							"options": { "raw": { "language": "json" } }
+						},
+						"url": {
+							"raw": "{{baseUrl}}/auth/refresh",
+							"host": ["{{baseUrl}}"],
+							"path": ["auth", "refresh"]
+						},
+						"description": "Cek status token dan waktu expire. Butuh token valid.\nNote: saat ini mengembalikan info cert — untuk fresh token, gunakan Login ulang."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Block Explorer",
+			"description": "Endpoint untuk blockchain explorer.\nReal-time update via WebSocket — lihat folder **WebSocket**.",
+			"item": [
+				{
+					"name": "List Blocks",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "X-Identity", "value": "admin@Org1", "description": "Dev mode only", "disabled": true },
+							{ "key": "X-Roles",    "value": "ADMIN",       "description": "Dev mode only", "disabled": true }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/blocks?limit=20&offset=0",
+							"host": ["{{baseUrl}}"],
+							"path": ["blocks"],
+							"query": [
+								{ "key": "limit",  "value": "20",  "description": "Jumlah block per halaman (max 100)" },
+								{ "key": "offset", "value": "0",   "description": "Offset dari block terbaru (0 = terbaru)" }
+							]
+						},
+						"description": "Daftar block terbaru, diurutkan dari yang terbaru. Pagination via `limit` dan `offset`."
+					},
+					"response": []
+				},
+				{
+					"name": "Get Block by Number",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "X-Identity", "value": "admin@Org1", "description": "Dev mode only", "disabled": true },
+							{ "key": "X-Roles",    "value": "ADMIN",       "description": "Dev mode only", "disabled": true }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/blocks/1",
+							"host": ["{{baseUrl}}"],
+							"path": ["blocks", "1"]
+						},
+						"description": "Detail satu block: header, transactions, hash, prev_hash.\nGanti `1` dengan nomor block yang diinginkan."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "HR Service — Invoke (Write)",
+			"description": "State-changing operations — menulis ke ledger, menghasilkan block baru.\nSemua endpoint butuh role `HR_MANAGER` atau lebih tinggi.",
+			"item": [
+				{
+					"name": "Hire Employee",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "X-Identity",   "value": "admin@Org1",  "description": "Dev mode only", "disabled": true },
+							{ "key": "X-Roles",      "value": "HR_MANAGER",  "description": "Dev mode only", "disabled": true }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"id\": \"EMP001\",\n    \"name\": \"Budi Santoso\",\n    \"department\": \"IT\",\n    \"position\": \"Senior Engineer\",\n    \"salary\": 25000000,\n    \"join_date\": \"2025-01-01\",\n    \"email\": \"budi@company.com\"\n}",
+							"options": { "raw": { "language": "json" } }
+						},
+						"url": {
+							"raw": "{{baseUrl}}/invoke/hr-service/hire_employee",
+							"host": ["{{baseUrl}}"],
+							"path": ["invoke", "hr-service", "hire_employee"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Update Salary",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "X-Identity",   "value": "admin@Org1",  "description": "Dev mode only", "disabled": true },
+							{ "key": "X-Roles",      "value": "HR_MANAGER",  "description": "Dev mode only", "disabled": true }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"id\": \"EMP001\",\n    \"department\": \"IT\",\n    \"new_salary\": 30000000,\n    \"reason\": \"Annual performance review\",\n    \"effective\": \"2025-07-01\"\n}",
+							"options": { "raw": { "language": "json" } }
+						},
+						"url": {
+							"raw": "{{baseUrl}}/invoke/hr-service/update_salary",
+							"host": ["{{baseUrl}}"],
+							"path": ["invoke", "hr-service", "update_salary"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Transfer Department",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "X-Identity",   "value": "admin@Org1",  "description": "Dev mode only", "disabled": true },
+							{ "key": "X-Roles",      "value": "HR_MANAGER",  "description": "Dev mode only", "disabled": true }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"id\": \"EMP001\",\n    \"from_dept\": \"IT\",\n    \"to_dept\": \"PRODUCT\",\n    \"reason\": \"Strategic realignment\"\n}",
+							"options": { "raw": { "language": "json" } }
+						},
+						"url": {
+							"raw": "{{baseUrl}}/invoke/hr-service/transfer_department",
+							"host": ["{{baseUrl}}"],
+							"path": ["invoke", "hr-service", "transfer_department"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Terminate Employee",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "X-Identity",   "value": "admin@Org1",  "description": "Dev mode only", "disabled": true },
+							{ "key": "X-Roles",      "value": "HR_MANAGER",  "description": "Dev mode only", "disabled": true }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"id\": \"EMP001\",\n    \"department\": \"IT\",\n    \"reason\": \"Resignation\",\n    \"exit_date\": \"2025-06-01\"\n}",
+							"options": { "raw": { "language": "json" } }
+						},
+						"url": {
+							"raw": "{{baseUrl}}/invoke/hr-service/terminate_employee",
+							"host": ["{{baseUrl}}"],
+							"path": ["invoke", "hr-service", "terminate_employee"]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Restore Employee",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "X-Identity",   "value": "admin@Org1",  "description": "Dev mode only", "disabled": true },
+							{ "key": "X-Roles",      "value": "HR_ADMIN",    "description": "Dev mode only", "disabled": true }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"id\": \"EMP001\",\n    \"department\": \"IT\"\n}",
+							"options": { "raw": { "language": "json" } }
+						},
+						"url": {
+							"raw": "{{baseUrl}}/invoke/hr-service/restore_employee",
+							"host": ["{{baseUrl}}"],
+							"path": ["invoke", "hr-service", "restore_employee"]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "HR Service — Query (Read-only)",
+			"description": "Read-only operations — tidak menulis ke ledger, tidak menghasilkan block.",
+			"item": [
+				{
+					"name": "Get Employee",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "X-Identity", "value": "admin@Org1", "description": "Dev mode only", "disabled": true },
+							{ "key": "X-Roles",    "value": "EMPLOYEE",   "description": "Dev mode only", "disabled": true }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/query/hr-service/get_employee?args={\"id\":\"EMP001\",\"department\":\"IT\"}",
+							"host": ["{{baseUrl}}"],
+							"path": ["query", "hr-service", "get_employee"],
+							"query": [
+								{ "key": "args", "value": "{\"id\":\"EMP001\",\"department\":\"IT\"}" }
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "List by Department",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "X-Identity", "value": "admin@Org1", "description": "Dev mode only", "disabled": true },
+							{ "key": "X-Roles",    "value": "EMPLOYEE",   "description": "Dev mode only", "disabled": true }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/query/hr-service/list_by_department?args={\"department\":\"IT\"}",
+							"host": ["{{baseUrl}}"],
+							"path": ["query", "hr-service", "list_by_department"],
+							"query": [
+								{ "key": "args", "value": "{\"department\":\"IT\"}" }
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Search Employees",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "X-Identity", "value": "admin@Org1", "description": "Dev mode only", "disabled": true }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/query/hr-service/search_employees?args={\"salary_min\":10000000,\"salary_max\":50000000}",
+							"host": ["{{baseUrl}}"],
+							"path": ["query", "hr-service", "search_employees"],
+							"query": [
+								{ "key": "args", "value": "{\"salary_min\":10000000,\"salary_max\":50000000}" }
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Employee History (Chaincode)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "X-Identity", "value": "admin@Org1", "description": "Dev mode only", "disabled": true }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/query/hr-service/get_employee_history?args={\"id\":\"EMP001\"}",
+							"host": ["{{baseUrl}}"],
+							"path": ["query", "hr-service", "get_employee_history"],
+							"query": [
+								{ "key": "args", "value": "{\"id\":\"EMP001\"}" }
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Ledger Records (Direct)",
+			"description": "Akses langsung ke world-state ledger, bypass chaincode logic.\nGunakan untuk debug atau audit.",
+			"item": [
+				{
+					"name": "Get Single Record",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "X-Identity", "value": "admin@Org1", "description": "Dev mode only", "disabled": true }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/records/employees/IT/EMP001",
+							"host": ["{{baseUrl}}"],
+							"path": ["records", "employees", "IT", "EMP001"],
+							"description": "Format: /records/:collection/:partition/:id"
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "List Records",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "X-Identity", "value": "admin@Org1", "description": "Dev mode only", "disabled": true }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/records/employees?partition=IT&limit=20&sort=name:asc",
+							"host": ["{{baseUrl}}"],
+							"path": ["records", "employees"],
+							"query": [
+								{ "key": "partition", "value": "IT",       "description": "Filter by partition" },
+								{ "key": "limit",     "value": "20" },
+								{ "key": "offset",    "value": "0",        "disabled": true },
+								{ "key": "sort",      "value": "name:asc", "description": "field:asc|desc, multi: field1:asc,field2:desc" },
+								{ "key": "status",    "value": "ACTIVE",   "description": "Filter by status field", "disabled": true },
+								{ "key": "deleted",   "value": "false",    "description": "true = include deleted records", "disabled": true }
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Get Record History",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "X-Identity", "value": "admin@Org1", "description": "Dev mode only", "disabled": true }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/history/employees/EMP001",
+							"host": ["{{baseUrl}}"],
+							"path": ["history", "employees", "EMP001"],
+							"description": "Format: /history/:collection/:id — returns versi + block_num per perubahan"
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Admin",
+			"description": "Memerlukan role `ADMIN`.",
+			"item": [
+				{
+					"name": "List Users",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "X-Identity", "value": "admin@Org1", "description": "Dev mode only", "disabled": true },
+							{ "key": "X-Roles",    "value": "ADMIN",       "description": "Dev mode only", "disabled": true }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/admin/users",
+							"host": ["{{baseUrl}}"],
+							"path": ["admin", "users"]
+						},
+						"description": "Daftar semua user yang enrolled — username, org, roles, expiry, status (VALID/EXPIRED)."
+					},
+					"response": []
+				},
+				{
+					"name": "Enroll User",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "X-Identity",   "value": "admin@Org1", "description": "Dev mode only", "disabled": true },
+							{ "key": "X-Roles",      "value": "ADMIN",       "description": "Dev mode only", "disabled": true }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"username\": \"alice\",\n    \"password\": \"alice1234\",\n    \"roles\": [\"HR_MANAGER\"],\n    \"org\": \"Org1\",\n    \"email\": \"alice@company.com\",\n    \"days\": 365\n}",
+							"options": { "raw": { "language": "json" } }
+						},
+						"url": {
+							"raw": "{{baseUrl}}/admin/users/enroll",
+							"host": ["{{baseUrl}}"],
+							"path": ["admin", "users", "enroll"]
+						},
+						"description": "Issue PQ cert untuk user baru dan simpan ke UserStore.\nUser bisa langsung login setelah enrolled — tidak butuh node restart."
+					},
+					"response": []
+				},
+				{
+					"name": "Revoke User",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "X-Identity",   "value": "admin@Org1", "description": "Dev mode only", "disabled": true },
+							{ "key": "X-Roles",      "value": "ADMIN",       "description": "Dev mode only", "disabled": true }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"reason\": \"Employee resigned\"\n}",
+							"options": { "raw": { "language": "json" } }
+						},
+						"url": {
+							"raw": "{{baseUrl}}/admin/users/alice/revoke",
+							"host": ["{{baseUrl}}"],
+							"path": ["admin", "users", "alice", "revoke"]
+						},
+						"description": "Revoke cert user — in-memory CRL diupdate langsung, token lama ditolak segera.\nGanti `alice` di URL dengan username target."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "WebSocket — Setup Guide",
+			"description": "WebSocket di Postman harus diimport dari file terpisah.\n\nImport file `qorvum-ws.postman_collection.json` untuk koneksi WebSocket real-time.\n\nURL: `ws://localhost:8080/api/v1/ws?token={{token}}`\nTopik: `blocks`, `tx`, `node_status`, `heartbeat`",
+			"item": [
+				{
+					"name": "Verify Node is Running (sebelum WS)",
+					"request": {
+						"auth": { "type": "noauth" },
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/health",
+							"host": ["{{baseUrl}}"],
+							"path": ["health"]
+						},
+						"description": "Pastikan node berjalan sebelum buka koneksi WebSocket.\n\nKalau health check OK, buka file **qorvum-ws.postman_collection.json** di Postman untuk real-time stream.\n\nURL WebSocket: `ws://localhost:8080/api/v1/ws?token=<token>`"
+					},
+					"response": []
+				}
+			]
+		}
+	]
+}

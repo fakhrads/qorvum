@@ -1,0 +1,19 @@
+[package]
+name        = "qorvum-contracts"
+version     = "0.1.0"
+edition     = "2021"
+description = "Contract executor for Qorvum (native + WASM)"
+license = "Apache-2.0"
+
+[dependencies]
+qorvum-crypto = { workspace = true }
+qorvum-ledger = { workspace = true }
+chain-sdk     = { workspace = true }
+serde         = { workspace = true }
+serde_json    = { workspace = true }
+anyhow        = { workspace = true }
+thiserror     = { workspace = true }
+tracing       = { workspace = true }
+bytes         = { workspace = true }
+wasmtime      = { workspace = true }
+tokio         = { workspace = true }

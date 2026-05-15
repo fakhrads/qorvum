@@ -1,0 +1,33 @@
+# Qorvum Node Configuration (Defaults)
+node:
+  name: "peer0-org1"
+  channel_id: "main-channel"
+  data_dir: "./data/ledger"
+  wasm_dir: "./chaincodes"
+
+crypto:
+  signing_algorithm: "dilithium3"   # dilithium3 | falcon512
+  hash_algorithm: "blake3"
+  cert_path: "./msp/cert.pqcert"
+  key_path:  "./msp/key.pqkey"
+
+network:
+  listen_addr: "0.0.0.0:7051"
+  grpc_port: 7052
+  bootstrap_peers: []
+
+consensus:
+  algorithm: "hotstuff"   # hotstuff | raft
+  validators: []
+  view_timeout_ms: 2000
+  block_max_txns: 500
+  block_timeout_ms: 1000
+
+gateway:
+  rest_port: 8080
+  grpc_port: 8081
+  enable_tls: true
+
+logging:
+  level: "info"   # trace | debug | info | warn | error
+  format: "pretty"  # pretty | json
