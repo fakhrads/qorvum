@@ -1,6 +1,6 @@
 //! Server-Sent Events (SSE) broadcaster.
 //!
-//! Semua event penting (block committed, node status, chaincode TX)
+//! Semua event penting (block committed, node status, contracts TX)
 //! di-push ke semua frontend client yang sedang subscribe ke
 //! GET /api/v1/events/stream — tanpa polling.
 //!

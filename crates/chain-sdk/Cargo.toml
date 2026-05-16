@@ -2,7 +2,7 @@
 name        = "chain-sdk"
 version     = "0.1.0"
 edition     = "2021"
-description = "SDK for writing Qorvum chaincodes in Rust"
+description = "SDK for writing Qorvum contracts in Rust"
 license = "Apache-2.0"
 
 [dependencies]

@@ -1,5 +1,5 @@
 //! # chain-sdk
-//! SDK for writing Qorvum chaincodes in Rust or Go.
+//! SDK for writing Qorvum contracts in Rust or Go.
 
 pub mod context;
 pub mod error;

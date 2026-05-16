@@ -33,7 +33,7 @@ Qorvum bukan database biasa dan bukan blockchain publik. Ia berada di antara ked
 | Block Explorer (UI) | ✅ Tersedia | Real-time via WebSocket |
 | Node-to-node PQ-TLS | ⏳ Belum | P2P saat ini menggunakan libp2p Noise |
 | Bootstrap peer (cross-network) | ⏳ Belum | Belum bisa antar subnet berbeda |
-| WASM chaincode | ⏳ Belum | Hanya native Rust saat ini |
+| WASM contract | ⏳ Progress | Hanya native Rust saat ini |
 
 ---
 
@@ -45,7 +45,7 @@ Qorvum terdiri dari lima lapisan fungsional yang bekerja secara terpisah namun t
 Titik masuk semua request dari luar. Menangani autentikasi JWT, routing request ke executor, dan mengembalikan response. Gateway juga menjadi node P2P dalam jaringan multi-node.
 
 **Execution Layer**  
-Menjalankan logika bisnis (contract/chaincode) dalam konteks terisolasi. Setiap eksekusi menghasilkan Read-Write Set — daftar kunci yang dibaca dan perubahan yang akan ditulis. Eksekusi tidak langsung menulis ke ledger; hasilnya diteruskan ke consensus terlebih dahulu.
+Menjalankan logika bisnis (contract) dalam konteks terisolasi. Setiap eksekusi menghasilkan Read-Write Set — daftar kunci yang dibaca dan perubahan yang akan ditulis. Eksekusi tidak langsung menulis ke ledger; hasilnya diteruskan ke consensus terlebih dahulu.
 
 **Consensus Layer**  
 Mengimplementasikan protokol HotStuff BFT (Byzantine Fault Tolerant). Menerima proposal transaksi dari gateway, mengedarkannya ke semua validator via P2P gossipsub, mengumpulkan vote, dan mengonfirmasi komitmen setelah quorum tercapai.
@@ -294,9 +294,9 @@ Untuk produksi, setidaknya satu node harus menjalankan role `all` atau kombinasi
 
 ---
 
-## 11. Kontrak / Chaincode
+## 11. Kontrak
 
-Logika bisnis dikemas dalam unit yang disebut **contract** (atau chaincode). Setiap contract adalah kumpulan fungsi yang beroperasi pada ledger.
+Logika bisnis dikemas dalam unit yang disebut **contract**. Setiap contract adalah kumpulan fungsi yang beroperasi pada ledger.
 
 **Kontrak bawaan:**
 - `hr-service` — manajemen data karyawan (hire, transfer, terminate, riwayat)
@@ -332,7 +332,7 @@ Logika bisnis dikemas dalam unit yang disebut **contract** (atau chaincode). Set
 | 5 | ✅ Selesai | REST auth, user management, role-based node, Explorer UI |
 | 5.2 | ⏳ Planned | Bootstrap peer dial untuk cross-network P2P |
 | 5.3 | ⏳ Planned | PQ-TLS di layer P2P (autentikasi cert node-to-node) |
-| 6 | ⏳ Planned | WASM chaincode isolation (hot-deploy kontrak) |
+| 6 | ⏳ Planned | WASM contract isolation (hot-deploy kontrak) |
 | 7 | ⏳ Planned | Docker, Helm chart, Prometheus metrics |
 | 8 | ⏳ Planned | HSM integration, cross-org federation |
 
@@ -350,7 +350,7 @@ Logika bisnis dikemas dalam unit yang disebut **contract** (atau chaincode). Set
 | **Quorum** | Jumlah minimum validator yang harus setuju agar transaksi dikonfirmasi |
 | **Validator** | Node yang berpartisipasi dalam consensus dan memverifikasi transaksi |
 | **Gateway** | Node yang melayani REST API dan menjadi titik masuk client |
-| **Chaincode / Contract** | Logika bisnis yang berjalan di dalam execution environment ledger |
+| **Contract** | Logika bisnis yang berjalan di dalam execution environment ledger |
 | **RYOW** | Read Your Own Writes — dalam satu transaksi, baca setelah tulis melihat nilai yang baru ditulis |
 | **Dilithium3** | Algoritma tanda tangan post-quantum (ML-DSA), NIST FIPS 204 |
 | **Kyber768** | Algoritma key encapsulation post-quantum (ML-KEM), NIST FIPS 203 |

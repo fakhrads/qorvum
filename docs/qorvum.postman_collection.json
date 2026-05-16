@@ -166,7 +166,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["contracts"]
 						},
-						"description": "Daftar chaincode yang terdeploy di node ini."
+						"description": "Daftar contract yang terdeploy di node ini."
 					},
 					"response": []
 				}
@@ -480,7 +480,7 @@
 					"response": []
 				},
 				{
-					"name": "Get Employee History (Chaincode)",
+					"name": "Get Employee History (Contract)",
 					"request": {
 						"method": "GET",
 						"header": [
@@ -501,7 +501,7 @@
 		},
 		{
 			"name": "Ledger Records (Direct)",
-			"description": "Akses langsung ke world-state ledger, bypass chaincode logic.\nGunakan untuk debug atau audit.",
+			"description": "Akses langsung ke world-state ledger, bypass contract logic.\nGunakan untuk debug atau audit.",
 			"item": [
 				{
 					"name": "Get Single Record",

@@ -3,7 +3,7 @@ node:
   name: "peer0-org1"
   channel_id: "main-channel"
   data_dir: "./data/ledger"
-  wasm_dir: "./chaincodes"
+  wasm_dir: "./contracts"
 
 crypto:
   signing_algorithm: "dilithium3"   # dilithium3 | falcon512

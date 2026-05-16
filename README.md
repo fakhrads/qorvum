@@ -626,7 +626,7 @@ curl -X POST http://localhost:8080/api/v1/admin/users/alice/revoke \
 |---|---|---|
 | `all` | Validator + Gateway + Peer | REST :8080, P2P :7051 |
 | `validator` | HotStuff BFT + P2P | P2P :7051 |
-| `gateway` | REST API, PKI auth, chaincode exec | REST :8080 |
+| `gateway` | REST API, PKI auth, contract exec | REST :8080 |
 | `peer` | P2P sync | P2P :7051 |
 
 ```bash
@@ -661,7 +661,7 @@ qorvum-node --role validator --role gateway
 
 ## Contracts
 
-Qorvum mendukung dua jenis chaincode: **native Rust** (dikompilasi langsung ke dalam binary node) dan **WASM** (AssemblyScript, di-deploy saat runtime).
+Qorvum mendukung dua jenis contract: **native Rust** (dikompilasi langsung ke dalam binary node) dan **WASM** (AssemblyScript, di-deploy saat runtime).
 
 ### HR Service (Native Rust)
 
@@ -919,7 +919,7 @@ cargo test -p qorvum-network  # PQ-TLS handshake
 | 5 | ✅ | REST auth, user management, role-based node |
 | 5.2 | ✅ | Bootstrap peer dial (cross-network P2P) |
 | 5.3 | ✅ | PQ-TLS di layer P2P (Kyber-1024 KEM + X25519 + AES-256-GCM) |
-| 6 | 🔄 | WASM chaincode — SDK + todo-as contract selesai; WASM executor di node menyusul |
+| 6 | 🔄 | WASM contract — SDK + todo-as contract selesai; WASM executor di node menyusul |
 | 7 | ⏳ | Docker, Helm, Prometheus |
 | 8 | ⏳ | HSM, cross-org federation |
 

@@ -1,5 +1,5 @@
 //! WorldState — high-level CRUD engine that sits on top of LedgerStore.
-//! This is what the chaincode executor calls. It collects a ReadWriteSet
+//! This is what the contract executor calls. It collects a ReadWriteSet
 //! during simulation, then applies it atomically at commit time.
 
 use crate::error::LedgerError;

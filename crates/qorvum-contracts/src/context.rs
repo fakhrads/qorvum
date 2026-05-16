@@ -1,5 +1,5 @@
 //! ChainContextImpl — the concrete implementation of chain-sdk's ChainContext trait.
-//! Wraps SimulationContext and bridges it to the chaincode.
+//! Wraps SimulationContext and bridges it to the contracts.
 
 use chain_sdk::{ChainContext, ChainError, HistoryEntry, Identity, Pagination,
                 QueryResult, SortBy, UpsertAction};
