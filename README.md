@@ -659,22 +659,64 @@ qorvum-node --role validator --role gateway
 
 ---
 
-## Contract: HR Service
+## Contracts
+
+Qorvum mendukung dua jenis chaincode: **native Rust** (dikompilasi langsung ke dalam binary node) dan **WASM** (AssemblyScript, di-deploy saat runtime).
+
+### HR Service (Native Rust)
+
+Contract built-in untuk manajemen karyawan.
 
 Prefix invoke: `POST /api/v1/invoke/hr-service/<function>`
-Prefix query: `GET /api/v1/query/hr-service/<function>`
+Prefix query:  `GET  /api/v1/query/hr-service/<function>`
 
 | Function | Role | Keterangan |
 |---|---|---|
 | `hire_employee` | HR_MANAGER | Rekrut karyawan |
-| `get_employee` | — | Ambil data |
+| `get_employee` | — | Ambil data karyawan |
 | `update_salary` | HR_MANAGER / FINANCE | Update gaji |
-| `transfer_department` | HR_MANAGER | Pindah dept |
-| `terminate_employee` | HR_MANAGER | Nonaktifkan |
-| `restore_employee` | HR_ADMIN | Pulihkan |
-| `list_by_department` | — | List per dept |
-| `search_employees` | — | Filter by salary/posisi |
-| `get_employee_history` | — | Audit trail |
+| `transfer_department` | HR_MANAGER | Pindah departemen |
+| `terminate_employee` | HR_MANAGER | Nonaktifkan karyawan |
+| `restore_employee` | HR_ADMIN | Pulihkan dari terminasi |
+| `list_by_department` | — | List karyawan per departemen |
+| `search_employees` | — | Filter by salary range / posisi |
+| `get_employee_history` | — | Audit trail perubahan |
+
+### Todo Contract (WASM / AssemblyScript)
+
+Contract contoh di `contracts/todo-as/` — ditulis dalam AssemblyScript, dikompilasi ke WASM, dan di-deploy ke node saat runtime. Mendemonstrasikan SDK ORM (`qorvum-contract-sdk`).
+
+```bash
+# Build
+cd contracts/todo-as
+npm install && npm run asbuild
+# Output: build/release.wasm
+```
+
+```ts
+// Deploy ke node
+const wasm = fs.readFileSync("contracts/todo-as/build/release.wasm");
+await executor.deploy_wasm("todo-contract", wasm);
+```
+
+Prefix invoke: `POST /api/v1/invoke/todo-contract/<function>`
+
+| Function | Role | Keterangan |
+|---|---|---|
+| `create_todo` | — | Buat todo baru |
+| `get_todo` | — | Ambil todo + assignee |
+| `complete_todo` | — | Tandai selesai |
+| `delete_todo` | — | Soft-delete |
+| `list_todos` | — | Query dengan filter status |
+| `assign_todo` | MANAGER | Assign todo ke user |
+
+Struktur contract:
+```
+contracts/todo-as/assembly/
+  index.ts          ← dispatch entry point
+  schema.ts         ← TodoSchema & UserSchema (kolom + relasi)
+  todo.service.ts   ← TodoService class (semua business logic)
+```
 
 ---
 
@@ -732,6 +774,10 @@ qv health
 
 ## Menulis Contract Sendiri
 
+Ada dua cara: **Native Rust** (dikompilasi ke dalam binary node) atau **WASM AssemblyScript** (di-deploy saat runtime tanpa rebuild node).
+
+### Opsi A — Native Rust
+
 ```rust
 // contracts/my-service/src/lib.rs
 use chain_sdk::{ChainContext, FieldValue};
@@ -745,16 +791,11 @@ pub fn create(
     if !ctx.has_role("WRITER") {
         return Err("Requires WRITER role".into());
     }
-    let caller = ctx.caller_identity();
-    if !caller.verified {
-        return Err("Production requires verified PQ certificate".into());
-    }
     let id    = args["id"].as_str().ok_or("missing id")?;
     let value = args["value"].as_str().ok_or("missing value")?;
 
     let mut fields = HashMap::new();
     fields.insert("value".into(), FieldValue::Text(value.into()));
-    fields.insert("created_by".into(), FieldValue::Text(caller.subject.clone()));
 
     let record = ctx.insert("my_collection", "default", id, fields)
         .map_err(|e| e.to_string())?;
@@ -773,6 +814,89 @@ Daftarkan di node:
 app_state.executor.write().await
     .register_native("my-service", my_service::register());
 ```
+
+### Opsi B — WASM AssemblyScript
+
+Tidak perlu rebuild node. Contract di-deploy saat runtime dari file `.wasm`.
+
+**1. Buat project baru (contoh ikuti struktur `contracts/todo-as/`):**
+
+```
+contracts/my-contract/
+  assembly/
+    index.ts          ← dispatch entry point
+    schema.ts         ← Schema definitions
+    my.service.ts     ← Service class
+  package.json
+  asconfig.json
+```
+
+**2. Definisikan schema dan service:**
+
+```ts
+// schema.ts
+import { Schema } from "qorvum-contract-sdk/assembly/index";
+
+export const ItemSchema = new Schema("items")
+  .text("name")
+  .text("status")
+  .bool("active");
+```
+
+```ts
+// my.service.ts
+import { QvModel, Fields, getField, qv_ok, qv_err } from "qorvum-contract-sdk/assembly/index";
+
+export class ItemService {
+  private items: QvModel;
+  constructor(items: QvModel) { this.items = items; }
+
+  create(args: string): i64 {
+    const id   = getField(args, "id");
+    const name = getField(args, "name");
+    if (id.length == 0 || name.length == 0) return qv_err("id dan name wajib diisi");
+
+    const record = this.items.create(id, new Fields()
+      .text("name",   name)
+      .text("status", "ACTIVE")
+      .bool("active", true),
+    );
+    if (this.items.hasError()) return qv_err(this.items.lastError());
+    return qv_ok(record);
+  }
+}
+```
+
+```ts
+// index.ts
+import { Context, QvModel, readString, qv_err } from "qorvum-contract-sdk/assembly/index";
+export { alloc } from "qorvum-contract-sdk/assembly/index";
+import { ItemSchema } from "./schema";
+import { ItemService } from "./my.service";
+
+export function dispatch(fn_ptr: i32, fn_len: i32, args_ptr: i32, args_len: i32): i64 {
+  const name    = readString(fn_ptr, fn_len);
+  const args    = readString(args_ptr, args_len);
+  const service = new ItemService(new QvModel(new Context(), ItemSchema));
+
+  if (name == "create") return service.create(args);
+  return qv_err("Unknown function: " + name);
+}
+```
+
+**3. Build dan deploy:**
+
+```bash
+cd contracts/my-contract
+npm install
+npm run asbuild   # → build/release.wasm
+
+# Deploy ke node
+const wasm = fs.readFileSync("build/release.wasm");
+await executor.deploy_wasm("my-contract", wasm);
+```
+
+SDK tersedia di [`qorvum-contract-sdk/`](../qorvum-contract-sdk/) dan menyediakan `Schema`, `QvModel`, `Filter`, `Sort`, `getField`, dan helper lainnya.
 
 ---
 
@@ -795,7 +919,7 @@ cargo test -p qorvum-network  # PQ-TLS handshake
 | 5 | ✅ | REST auth, user management, role-based node |
 | 5.2 | ✅ | Bootstrap peer dial (cross-network P2P) |
 | 5.3 | ✅ | PQ-TLS di layer P2P (Kyber-1024 KEM + X25519 + AES-256-GCM) |
-| 6 | ⏳ | WASM chaincode |
+| 6 | 🔄 | WASM chaincode — SDK + todo-as contract selesai; WASM executor di node menyusul |
 | 7 | ⏳ | Docker, Helm, Prometheus |
 | 8 | ⏳ | HSM, cross-org federation |
 
