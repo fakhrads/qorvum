@@ -8,3 +8,5 @@
 .claude
 .idea
 .vscode
+/node_modules/
+/contracts/todo-as/node_modules/
