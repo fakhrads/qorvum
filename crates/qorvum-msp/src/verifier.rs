@@ -75,6 +75,11 @@ impl IdentityVerifier {
         }
     }
 
+    /// Return all trusted CA public info — used by the federation certs endpoint.
+    pub fn trusted_cas(&self) -> &[CaPublicInfo] {
+        &self.trusted_cas
+    }
+
     /// Verify a certificate against all trusted CAs.
     pub fn verify_cert(&self, cert: &PQCertificate) -> Result<(), MspError> {
         if !cert.verify() {

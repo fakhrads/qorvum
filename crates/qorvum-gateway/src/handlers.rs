@@ -506,12 +506,23 @@ pub async fn admin_list_users(
         .unwrap_or_default()
         .as_nanos() as u64;
 
+    // Load CRL so revoked users show the correct status
+    let crl = if let Some(ca) = state.ca.as_ref() {
+        let ca_guard = ca.lock().await;
+        ca_guard.export_public().crl
+    } else {
+        std::collections::HashMap::new()
+    };
+
     let users: Vec<Value> = user_store
         .list_usernames()
         .into_iter()
         .filter_map(|name| {
             let cert = user_store.get_cert(&name).ok()?;
-            let status = if cert.not_after < now_nanos {
+            let serial_hex = hex::encode(cert.serial);
+            let status = if crl.contains_key(&serial_hex) {
+                "REVOKED"
+            } else if cert.not_after < now_nanos {
                 "EXPIRED"
             } else {
                 "VALID"
@@ -578,5 +589,122 @@ pub async fn admin_revoke_user(
         "serial":   hex::encode(cert.serial),
         "reason":   reason,
         "message":  "User revoked. Existing tokens will be rejected immediately.",
+    })))
+}
+
+// ── GET /api/v1/admin/certs ───────────────────────────────────────────────────
+// Federation view: aggregates certificates from ALL trusted CAs (all orgs).
+// Falls back to local CA only if no verifier is configured.
+// Requires ADMIN role.
+
+pub async fn admin_list_certs(
+    State(state): State<Arc<AppState>>,
+    Extension(caller): Extension<CallerIdentity>,
+) -> Result<Json<Value>, ApiError> {
+    require_admin(&caller)?;
+
+    let now_nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64;
+
+    fn cert_to_json(cert: &qorvum_msp::PQCertificate, crl: &std::collections::HashMap<String, String>, now_nanos: u64, ca_name: &str) -> Value {
+        let serial_hex = hex::encode(cert.serial);
+        let status = if crl.contains_key(&serial_hex) {
+            "REVOKED"
+        } else if cert.not_after < now_nanos {
+            "EXPIRED"
+        } else {
+            "VALID"
+        };
+        json!({
+            "serial":        serial_hex,
+            "subject":       cert.subject.common_name,
+            "org":           cert.subject.org,
+            "org_unit":      cert.subject.org_unit,
+            "email":         cert.subject.email,
+            "issuer":        ca_name,
+            "cert_type":     cert.cert_type.to_string(),
+            "algorithm":     format!("{:?}", cert.algorithm),
+            "roles":         cert.roles,
+            "not_before":    cert.not_before / 1_000_000_000,
+            "not_after":     cert.not_after  / 1_000_000_000,
+            "fingerprint":   hex::encode(cert.fingerprint()),
+            "status":        status,
+            "revoke_reason": crl.get(&serial_hex),
+        })
+    }
+
+    // Prefer verifier (has all trusted CAs from all orgs) over local CA only
+    if let Some(verifier_lock) = state.verifier.as_ref() {
+        let verifier = verifier_lock.read().await;
+        let trusted = verifier.trusted_cas();
+
+        let mut all_certs: Vec<Value> = Vec::new();
+        let mut all_crl: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut ca_list: Vec<Value> = Vec::new();
+
+        for ca_pub in trusted {
+            // Aggregate certs from this CA
+            for cert in ca_pub.cert_registry.values() {
+                all_certs.push(cert_to_json(cert, &ca_pub.crl, now_nanos, &ca_pub.ca_name));
+            }
+            // Merge CRLs
+            all_crl.extend(ca_pub.crl.clone());
+
+            let ca_cert = &ca_pub.ca_cert;
+            ca_list.push(json!({
+                "name":        ca_pub.ca_name,
+                "org":         ca_pub.ca_org,
+                "serial":      hex::encode(ca_cert.serial),
+                "algorithm":   format!("{:?}", ca_cert.algorithm),
+                "not_before":  ca_cert.not_before / 1_000_000_000,
+                "not_after":   ca_cert.not_after  / 1_000_000_000,
+                "fingerprint": hex::encode(ca_cert.fingerprint()),
+            }));
+        }
+
+        let total = all_certs.len();
+        return Ok(ok(json!({
+            "certs":  all_certs,
+            "crl":    all_crl,
+            "cas":    ca_list,
+            // Keep "ca" as first CA for backwards compat with single-CA frontend
+            "ca":     ca_list.first(),
+            "total":  total,
+        })));
+    }
+
+    // Fallback: local CA only (no verifier configured — dev mode)
+    let ca = state.ca.as_ref().ok_or_else(|| {
+        ApiError::Internal("CA not configured — start the node with QORVUM_CA_PASSPHRASE".into())
+    })?;
+    let public = {
+        let ca_guard = ca.lock().await;
+        ca_guard.export_public()
+    };
+
+    let certs: Vec<Value> = public.cert_registry.values()
+        .map(|cert| cert_to_json(cert, &public.crl, now_nanos, &public.ca_name))
+        .collect();
+
+    let ca_cert = &public.ca_cert;
+    let ca_info = json!({
+        "name":        public.ca_name,
+        "org":         public.ca_org,
+        "serial":      hex::encode(ca_cert.serial),
+        "algorithm":   format!("{:?}", ca_cert.algorithm),
+        "not_before":  ca_cert.not_before / 1_000_000_000,
+        "not_after":   ca_cert.not_after  / 1_000_000_000,
+        "fingerprint": hex::encode(ca_cert.fingerprint()),
+    });
+
+    let total = certs.len();
+    Ok(ok(json!({
+        "certs": certs,
+        "crl":   public.crl,
+        "cas":   [ca_info.clone()],
+        "ca":    ca_info,
+        "total": total,
     })))
 }

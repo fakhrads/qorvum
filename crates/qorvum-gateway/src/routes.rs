@@ -55,6 +55,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/admin/users",                            get(handlers::admin_list_users))
         .route("/admin/users/enroll",                     post(handlers::admin_enroll_user))
         .route("/admin/users/:username/revoke",           post(handlers::admin_revoke_user))
+        .route("/admin/certs",                            get(handlers::admin_list_certs))
         .layer(axum_middleware::from_fn_with_state(
             state.clone(),
             middleware::identity_middleware,
