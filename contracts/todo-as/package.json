@@ -1,0 +1,14 @@
+{
+  "name": "todo-as",
+  "version": "0.1.0",
+  "description": "Example Qorvum smart contract written in AssemblyScript",
+  "scripts": {
+    "asbuild:debug":   "asc assembly/index.ts --outFile build/debug.wasm   --textFile build/debug.wat   --runtime stub --path node_modules --debug",
+    "asbuild:release": "asc assembly/index.ts --outFile build/release.wasm --textFile build/release.wat --runtime stub --path node_modules --optimizeLevel 3",
+    "asbuild":         "npm run asbuild:release"
+  },
+  "dependencies": {
+    "assemblyscript": "^0.27.0",
+    "qorvum-contract-sdk":   "file:../../../qorvum-contract-sdk"
+  }
+}
