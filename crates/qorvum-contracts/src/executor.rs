@@ -5,8 +5,9 @@ use crate::wasm_host;
 use chain_sdk::ChainContext;
 use qorvum_ledger::store::LedgerStore;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::{info, debug, warn};
 
 /// A native Rust contract function (for dev/testing without WASM)
 pub type NativeFn = fn(&str, serde_json::Value, &dyn ChainContext) -> Result<serde_json::Value, String>;
@@ -29,7 +30,9 @@ pub struct ExecResult {
 pub struct ContractExecutor {
     store:            Arc<dyn LedgerStore>,
     native_registry:  HashMap<String, NativeContract>,
-    wasm_registry:    HashMap<String, Vec<u8>>,  // contract_id → wasm bytes
+    wasm_registry:    HashMap<String, Vec<u8>>,
+    /// Directory where deployed WASM bytes are persisted: {data_dir}/contracts/
+    contracts_dir:    Option<PathBuf>,
 }
 
 impl ContractExecutor {
@@ -38,6 +41,49 @@ impl ContractExecutor {
             store,
             native_registry: HashMap::new(),
             wasm_registry:   HashMap::new(),
+            contracts_dir:   None,
+        }
+    }
+
+    /// Enable persistence: deployed contracts survive node restarts.
+    /// Call this before deploy_wasm / load_persisted.
+    pub fn with_persistence(mut self, data_dir: &str) -> Self {
+        let dir = PathBuf::from(data_dir).join("contracts");
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            warn!("Cannot create contracts dir {:?}: {e}", dir);
+        } else {
+            self.contracts_dir = Some(dir);
+        }
+        self
+    }
+
+    /// Load all previously deployed contracts from disk.
+    /// Call once on startup after with_persistence().
+    pub fn load_persisted(&mut self) {
+        let dir = match &self.contracts_dir {
+            Some(d) => d.clone(),
+            None    => return,
+        };
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e)  => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("wasm") {
+                continue;
+            }
+            let contract_id = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(s) => s.to_string(),
+                None    => continue,
+            };
+            match std::fs::read(&path) {
+                Ok(bytes) => {
+                    info!("Loaded persisted WASM contract '{}' ({} bytes)", contract_id, bytes.len());
+                    self.wasm_registry.insert(contract_id, bytes);
+                }
+                Err(e) => warn!("Failed to load persisted contract {:?}: {e}", path),
+            }
         }
     }
 
@@ -54,9 +100,17 @@ impl ContractExecutor {
         });
     }
 
-    /// Deploy WASM contract bytes
+    /// Deploy WASM contract bytes and persist to disk if persistence is enabled.
     pub fn deploy_wasm(&mut self, contract_id: &str, wasm_bytes: Vec<u8>) {
-        info!("Deployed WASM contract: {} ({} bytes)", contract_id, wasm_bytes.len());
+        if let Some(dir) = &self.contracts_dir {
+            let path = dir.join(format!("{}.wasm", contract_id));
+            match std::fs::write(&path, &wasm_bytes) {
+                Ok(_)  => info!("Deployed WASM contract '{}' ({} bytes) → {:?}", contract_id, wasm_bytes.len(), path),
+                Err(e) => warn!("Deployed '{}' in-memory only — failed to persist: {e}", contract_id),
+            }
+        } else {
+            info!("Deployed WASM contract '{}' ({} bytes) [in-memory only]", contract_id, wasm_bytes.len());
+        }
         self.wasm_registry.insert(contract_id.to_string(), wasm_bytes);
     }
 

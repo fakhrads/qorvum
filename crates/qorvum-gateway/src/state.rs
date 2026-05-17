@@ -23,33 +23,39 @@ pub struct AppState {
     pub user_store:   Option<Arc<UserStore>>,
     /// SSE broadcaster — push real-time events ke semua connected frontend
     pub broadcaster:  Arc<EventBroadcaster>,
+    /// Node data directory path, used for disk usage metrics
+    pub data_dir:     String,
+    /// Process start time for uptime calculation
+    pub start_time:   std::time::Instant,
 }
 
 impl AppState {
     pub fn new(channel_id: &str, data_dir: &str) -> Self {
         let store = Self::open_store(data_dir);
-        Self::with_all(channel_id, store, None, None)
+        Self::with_all(channel_id, data_dir.to_string(), store, None, None)
     }
 
-    pub fn new_with_store(channel_id: &str, store: Arc<dyn LedgerStore>) -> Self {
-        Self::with_all(channel_id, store, None, None)
+    pub fn new_with_store(channel_id: &str, data_dir: &str, store: Arc<dyn LedgerStore>) -> Self {
+        Self::with_all(channel_id, data_dir.to_string(), store, None, None)
     }
 
     pub fn new_with_consensus(
         channel_id: &str,
+        data_dir:   &str,
         store:      Arc<dyn LedgerStore>,
         consensus:  Arc<ConsensusEngine>,
     ) -> Self {
-        Self::with_all(channel_id, store, Some(consensus), None)
+        Self::with_all(channel_id, data_dir.to_string(), store, Some(consensus), None)
     }
 
     pub fn new_with_consensus_and_pki(
         channel_id: &str,
+        data_dir:   &str,
         store:      Arc<dyn LedgerStore>,
         consensus:  Arc<ConsensusEngine>,
         verifier:   Arc<RwLock<IdentityVerifier>>,
     ) -> Self {
-        Self::with_all(channel_id, store, Some(consensus), Some(verifier))
+        Self::with_all(channel_id, data_dir.to_string(), store, Some(consensus), Some(verifier))
     }
 
     pub fn set_verifier(&mut self, verifier: Arc<RwLock<IdentityVerifier>>) {
@@ -105,11 +111,19 @@ impl AppState {
 
     fn with_all(
         channel_id: &str,
+        data_dir:   String,
         store:      Arc<dyn LedgerStore>,
         consensus:  Option<Arc<ConsensusEngine>>,
         verifier:   Option<Arc<RwLock<IdentityVerifier>>>,
     ) -> Self {
-        let executor     = ContractExecutor::new(store.clone());
+        let executor = {
+            let mut e = ContractExecutor::new(store.clone());
+            if !data_dir.is_empty() {
+                e = e.with_persistence(&data_dir);
+                e.load_persisted();
+            }
+            e
+        };
         let query_engine = QueryEngine::new(store.clone());
         let broadcaster  = Arc::new(EventBroadcaster::new());
 
@@ -125,6 +139,8 @@ impl AppState {
             ca:          None,
             user_store:  None,
             broadcaster,
+            data_dir,
+            start_time:  std::time::Instant::now(),
         }
     }
 }

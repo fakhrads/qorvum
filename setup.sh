@@ -54,12 +54,33 @@ elif command -v brew &>/dev/null; then
     brew install llvm cmake protobuf 2>/dev/null || true
 fi
 
-# ── 4. Build workspace ────────────────────────────────────────────────────────
+# ── 4. Build AssemblyScript contracts ────────────────────────────────────────
+step "Building AssemblyScript smart contracts (WASM)"
+
+if ! command -v node &>/dev/null; then
+    warn "Node.js not found — skipping AssemblyScript build (install Node.js to enable)"
+else
+    AS_DIR="contracts/todo-as"
+    if [ -d "$AS_DIR" ]; then
+        info "Building $AS_DIR..."
+        (cd "$AS_DIR" && npm install --silent && npm run asbuild)
+        WASM_OUT="$AS_DIR/build/release.wasm"
+        if [ -f "$WASM_OUT" ]; then
+            info "WASM built: $WASM_OUT"
+        else
+            warn "WASM build may have failed — check $AS_DIR/build/"
+        fi
+    else
+        warn "contracts/todo-as not found — skipping"
+    fi
+fi
+
+# ── 5. Build workspace ────────────────────────────────────────────────────────
 step "Building workspace"
 cargo build --workspace
 info "Build complete"
 
-# ── 5. Install qv CLI ────────────────────────────────────────────────────────
+# ── 6. Install qv CLI ────────────────────────────────────────────────────────
 step "Installing qv CLI"
 
 cargo install --path crates/qorvum-cli --quiet
@@ -82,12 +103,12 @@ else
     fi
 fi
 
-# ── 6. Run tests ──────────────────────────────────────────────────────────────
+# ── 7. Run tests ──────────────────────────────────────────────────────────────
 step "Running tests"
 cargo test --workspace --lib
 info "All tests passed"
 
-# ── 7. Tampilkan direktori struktur Qorvum ────────────────────────────────────
+# ── 8. Tampilkan direktori struktur Qorvum ────────────────────────────────────
 QORVUM_HOME="$HOME/.qorvum"
 if [ ! -d "$QORVUM_HOME" ]; then
     mkdir -p "$QORVUM_HOME/ca"

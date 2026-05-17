@@ -15,6 +15,21 @@ use qorvum_msp::{
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
+// TUI imports
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEventKind},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Gauge, List, ListItem, Paragraph},
+    Terminal,
+};
+
 // ── Direktori default ─────────────────────────────────────────────────────────
 
 /// Root direktori Qorvum di home user: ~/.qorvum
@@ -70,6 +85,12 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Interactive setup wizard — creates CA, admin identity, and config/node.yml
+    Init {
+        /// Organization name (skip wizard prompt if provided)
+        #[arg(long)]
+        org: Option<String>,
+    },
     /// Certificate Authority management
     Ca {
         #[command(subcommand)]
@@ -118,10 +139,30 @@ enum Commands {
         collection: String,
         id:         String,
     },
+    /// Smart contract management
+    Contract {
+        #[command(subcommand)]
+        action: ContractCommands,
+    },
     /// Get a block by number
     Block { number: u64 },
     /// Show node health
     Health,
+}
+
+#[derive(Subcommand, Debug)]
+enum ContractCommands {
+    /// Deploy a WASM contract to the node (requires ADMIN role)
+    Deploy {
+        /// Contract identifier (e.g. "todo-as")
+        #[arg(long)]
+        name: String,
+        /// Path to the compiled .wasm file
+        #[arg(long)]
+        wasm: PathBuf,
+    },
+    /// List all deployed contracts
+    List,
 }
 
 #[derive(Subcommand, Debug)]
@@ -211,7 +252,6 @@ enum IdentityCommands {
 enum NodeCommands {
     /// Print the Peer ID of this node from its saved keypair
     PeerId {
-        /// Direktori data node (berisi validator.key)
         #[arg(long, default_value = "./data")]
         data_dir: PathBuf,
     },
@@ -220,6 +260,8 @@ enum NodeCommands {
         #[arg(long, default_value = "./data")]
         data_dir: PathBuf,
     },
+    /// Live node dashboard — like `top` for your Qorvum node
+    Top,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -746,7 +788,7 @@ fn cmd_node_info(data_dir: PathBuf) -> Result<()> {
 // ── Gateway API commands ──────────────────────────────────────────────────────
 
 async fn send_api(
-    client:  &reqwest::Client,
+    _client: &reqwest::Client,
     req:     reqwest::RequestBuilder,
     bearer:  Option<String>,
 ) -> Result<serde_json::Value> {
@@ -757,6 +799,380 @@ async fn send_api(
     let resp = req.send().await.context("Request failed")?;
     let json: serde_json::Value = resp.json().await.context("Failed to parse response")?;
     Ok(json)
+}
+
+// ── Init wizard ───────────────────────────────────────────────────────────────
+
+fn cmd_init(org_arg: Option<String>) -> Result<()> {
+    use dialoguer::{theme::ColorfulTheme, Confirm, Input, Password, Select};
+
+    let theme = ColorfulTheme::default();
+
+    println!();
+    println!("  ╔══════════════════════════════════════════════╗");
+    println!("  ║   Qorvum Setup Wizard                        ║");
+    println!("  ╚══════════════════════════════════════════════╝");
+    println!();
+
+    // ── Step 1: Org name ──────────────────────────────────────────────────────
+    let org: String = match org_arg {
+        Some(o) => o,
+        None => Input::with_theme(&theme)
+            .with_prompt("Organization name")
+            .default("MyOrg".to_string())
+            .interact_text()?,
+    };
+
+    // ── Step 2: Admin username ────────────────────────────────────────────────
+    let admin_name: String = Input::with_theme(&theme)
+        .with_prompt("Admin username")
+        .default("admin".to_string())
+        .interact_text()?;
+
+    // ── Step 3: Node role ─────────────────────────────────────────────────────
+    let roles_list = &["all (validator + gateway + peer)", "validator", "gateway", "peer"];
+    let role_idx = Select::with_theme(&theme)
+        .with_prompt("Node role")
+        .items(roles_list)
+        .default(0)
+        .interact()?;
+    let node_role = ["all", "validator", "gateway", "peer"][role_idx];
+
+    // ── Step 4: Addresses ─────────────────────────────────────────────────────
+    let listen: String = Input::with_theme(&theme)
+        .with_prompt("Gateway listen address")
+        .default("0.0.0.0:8080".to_string())
+        .interact_text()?;
+
+    let p2p_listen: String = Input::with_theme(&theme)
+        .with_prompt("P2P listen address")
+        .default("/ip4/0.0.0.0/tcp/7051".to_string())
+        .interact_text()?;
+
+    let data_dir: String = Input::with_theme(&theme)
+        .with_prompt("Data directory")
+        .default("./data".to_string())
+        .interact_text()?;
+
+    // ── Step 5: CA passphrase ─────────────────────────────────────────────────
+    let passphrase = Password::with_theme(&theme)
+        .with_prompt("CA passphrase")
+        .with_confirmation("Confirm passphrase", "Passphrases do not match")
+        .interact()?;
+
+    // ── Summary & confirm ─────────────────────────────────────────────────────
+    println!();
+    println!("  Summary");
+    println!("  ───────────────────────────────────────────");
+    println!("  Org      : {}", org);
+    println!("  Admin    : {} [ADMIN]", admin_name);
+    println!("  Role     : {}", node_role);
+    println!("  Listen   : {}", listen);
+    println!("  P2P      : {}", p2p_listen);
+    println!("  Data dir : {}", data_dir);
+    println!("  CA dir   : ~/.qorvum/ca/{}", org.to_lowercase());
+    println!();
+
+    if !Confirm::with_theme(&theme).with_prompt("Proceed?").default(true).interact()? {
+        println!("Aborted.");
+        return Ok(());
+    }
+
+    println!();
+
+    // ── Execute ───────────────────────────────────────────────────────────────
+    // 1. CA init
+    print!("  Initializing CA...");
+    cmd_ca_init(org.clone(), false, None, Some(passphrase.clone()))?;
+    println!(" done");
+
+    // 2. Issue admin cert
+    print!("  Issuing admin certificate...");
+    cmd_ca_issue(None, Some(org.clone()), admin_name.clone(), "ADMIN".to_string(), 365, false, None)?;
+    println!(" done");
+
+    // 3. Set active identity
+    let id_dir = default_identities_dir();
+    let cert_path = id_dir.join(format!("{}.cert", admin_name));
+    let key_path  = id_dir.join(format!("{}.key",  admin_name));
+    print!("  Setting active identity...");
+    cmd_identity_use(cert_path, key_path)?;
+    println!(" done");
+
+    // 4. Write config/node.yml
+    print!("  Writing config/node.yml...");
+    let ca_dir_str = default_ca_dir(&org).display().to_string();
+    let config_yaml = format!(
+        "# Qorvum node configuration — generated by `qv init`\norg: {org}\n\nnode:\n  role: {node_role}\n  listen: \"{listen}\"\n  p2p_listen: \"{p2p_listen}\"\n  data_dir: \"{data_dir}\"\n  channel: main-channel\n  log_level: info\n\nca:\n  dir: \"{ca_dir_str}\"\n  # passphrase: set via QORVUM_CA_PASSPHRASE env var instead\n\npeers: []\nvalidator_keys: []\n"
+    );
+    std::fs::create_dir_all("config")?;
+    std::fs::write("config/node.yml", &config_yaml)?;
+    println!(" done");
+
+    println!();
+    println!("  Setup complete!");
+    println!();
+    println!("  Start your node:");
+    println!("    cargo run -p qorvum-node");
+    println!();
+    println!("  Check health:");
+    println!("    qv health");
+    println!();
+    println!("  Live dashboard:");
+    println!("    qv node top");
+    println!();
+
+    Ok(())
+}
+
+// ── Node top TUI ──────────────────────────────────────────────────────────────
+
+#[derive(Default, Clone)]
+struct NodeMetrics {
+    block_height:  u64,
+    uptime_secs:   u64,
+    cpu_percent:   f64,
+    mem_used_mb:   u64,
+    mem_total_mb:  u64,
+    mem_percent:   u64,
+    disk_mb:       u64,
+    recent_blocks: Vec<BlockSummary>,
+    error:         Option<String>,
+}
+
+#[derive(Default, Clone)]
+struct BlockSummary {
+    number:    u64,
+    tx_count:  u64,
+    hash:      String,
+    timestamp: u64,
+}
+
+async fn fetch_metrics(url: &str) -> NodeMetrics {
+    let endpoint = format!("{}/api/v1/metrics", url.trim_end_matches('/'));
+    match reqwest::get(&endpoint).await {
+        Err(e) => NodeMetrics { error: Some(format!("Connection failed: {e}")), ..Default::default() },
+        Ok(resp) => match resp.json::<serde_json::Value>().await {
+            Err(e) => NodeMetrics { error: Some(format!("Parse error: {e}")), ..Default::default() },
+            Ok(json) => {
+                let d = &json["data"];
+                let blocks = d["recent_blocks"].as_array()
+                    .map(|arr| arr.iter().map(|b| BlockSummary {
+                        number:   b["number"].as_u64().unwrap_or(0),
+                        tx_count: b["tx_count"].as_u64().unwrap_or(0),
+                        hash:     b["hash"].as_str().unwrap_or("").to_string(),
+                        timestamp: b["timestamp"].as_u64().unwrap_or(0),
+                    }).collect())
+                    .unwrap_or_default();
+                NodeMetrics {
+                    block_height:  d["block_height"].as_u64().unwrap_or(0),
+                    uptime_secs:   d["uptime_secs"].as_u64().unwrap_or(0),
+                    cpu_percent:   d["cpu_percent"].as_f64().unwrap_or(0.0),
+                    mem_used_mb:   d["mem_used_mb"].as_u64().unwrap_or(0),
+                    mem_total_mb:  d["mem_total_mb"].as_u64().unwrap_or(0),
+                    mem_percent:   d["mem_percent"].as_u64().unwrap_or(0),
+                    disk_mb:       d["disk_mb"].as_u64().unwrap_or(0),
+                    recent_blocks: blocks,
+                    error:         None,
+                }
+            }
+        }
+    }
+}
+
+fn fmt_uptime(secs: u64) -> String {
+    let h = secs / 3600;
+    let m = (secs % 3600) / 60;
+    let s = secs % 60;
+    if h > 0 { format!("{h}h {m}m {s}s") }
+    else if m > 0 { format!("{m}m {s}s") }
+    else { format!("{s}s") }
+}
+
+fn fmt_ts(unix_secs: u64) -> String {
+    Utc.timestamp_opt(unix_secs as i64, 0)
+        .single()
+        .map(|dt| dt.format("%H:%M:%S").to_string())
+        .unwrap_or_else(|| "?".to_string())
+}
+
+fn gauge_bar(pct: u64) -> Gauge<'static> {
+    let color = if pct > 85 { Color::Red }
+                else if pct > 60 { Color::Yellow }
+                else { Color::Green };
+    Gauge::default()
+        .gauge_style(Style::default().fg(color))
+        .percent(pct.min(100) as u16)
+}
+
+fn draw_top(f: &mut ratatui::Frame, metrics: &NodeMetrics, url: &str, tick: u64) {
+    let area = f.area();
+
+    // Root layout: header | body | footer
+    let root = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    // ── Header ────────────────────────────────────────────────────────────────
+    let uptime_str  = fmt_uptime(metrics.uptime_secs);
+    let header_text = if let Some(err) = &metrics.error {
+        Line::from(vec![
+            Span::styled(" ERROR ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::raw(format!(" {err}")),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled(" Qorvum Node ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw(format!("  url: {}   uptime: {}   [q] quit", url, uptime_str)),
+        ])
+    };
+    let header = Paragraph::new(header_text)
+        .block(Block::default().borders(Borders::ALL));
+    f.render_widget(header, root[0]);
+
+    // ── Body: left (blockchain) | right (system) ─────────────────────────────
+    let body = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(root[1]);
+
+    // Split left into stats | recent blocks
+    let left = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(6), Constraint::Min(0)])
+        .split(body[0]);
+
+    // ── Blockchain stats ──────────────────────────────────────────────────────
+    let block_text = vec![
+        Line::from(vec![
+            Span::raw("  Height    "),
+            Span::styled(
+                format!("{}", metrics.block_height),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(format!("  Disk      {} MB (RocksDB)", metrics.disk_mb)),
+    ];
+    let block_panel = Paragraph::new(block_text)
+        .block(Block::default().borders(Borders::ALL).title(" Blockchain "));
+    f.render_widget(block_panel, left[0]);
+
+    // ── Recent blocks ─────────────────────────────────────────────────────────
+    let block_items: Vec<ListItem> = metrics.recent_blocks.iter().map(|b| {
+        let ts = fmt_ts(b.timestamp);
+        ListItem::new(Line::from(vec![
+            Span::styled(
+                format!(" #{:<6}", b.number),
+                Style::default().fg(Color::Cyan),
+            ),
+            Span::raw(format!("  {:>8}  {:>3} tx  {}", b.hash, b.tx_count, ts)),
+        ]))
+    }).collect();
+    let block_list = List::new(block_items)
+        .block(Block::default().borders(Borders::ALL).title(" Recent Blocks "));
+    f.render_widget(block_list, left[1]);
+
+    // ── System stats ──────────────────────────────────────────────────────────
+    let sys_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Length(4),
+            Constraint::Min(0),
+        ])
+        .split(body[1]);
+
+    // CPU panel
+    let cpu_label = format!(" CPU  {:.1}%", metrics.cpu_percent);
+    let cpu_block = Block::default().borders(Borders::ALL).title(" System ");
+    let inner_sys = cpu_block.inner(sys_chunks[0]);
+    f.render_widget(cpu_block, sys_chunks[0]);
+
+    let cpu_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(inner_sys);
+    f.render_widget(Paragraph::new(cpu_label), cpu_layout[0]);
+    f.render_widget(gauge_bar(metrics.cpu_percent as u64), cpu_layout[1]);
+
+    // RAM panel
+    let ram_label = format!(" RAM  {} / {} MB", metrics.mem_used_mb, metrics.mem_total_mb);
+    let ram_inner = Block::default().borders(Borders::ALL).inner(sys_chunks[1]);
+    f.render_widget(Block::default().borders(Borders::ALL), sys_chunks[1]);
+    let ram_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(ram_inner);
+    f.render_widget(Paragraph::new(ram_label), ram_layout[0]);
+    f.render_widget(gauge_bar(metrics.mem_percent), ram_layout[1]);
+
+    // Disk panel (text only)
+    let disk_text = format!("\n  Disk  {} MB  (RocksDB ledger)", metrics.disk_mb);
+    let disk_panel = Paragraph::new(disk_text)
+        .block(Block::default().borders(Borders::ALL));
+    f.render_widget(disk_panel, sys_chunks[2]);
+
+    // ── Footer ────────────────────────────────────────────────────────────────
+    let dot = if tick % 2 == 0 { "●" } else { "○" };
+    let footer = Paragraph::new(Line::from(vec![
+        Span::styled(format!(" {dot} "), Style::default().fg(Color::Green)),
+        Span::raw(format!("Refreshing every 2s   last update: {}", fmt_ts(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+        ))),
+    ]));
+    f.render_widget(footer, root[2]);
+}
+
+async fn cmd_node_top(url: String) -> Result<()> {
+    enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend  = CrosstermBackend::new(stdout);
+    let mut term = Terminal::new(backend)?;
+
+    let mut metrics = NodeMetrics::default();
+    let mut tick    = 0u64;
+    let poll_every  = std::time::Duration::from_secs(2);
+    let mut last_fetch = std::time::Instant::now()
+        .checked_sub(poll_every)
+        .unwrap_or_else(std::time::Instant::now);
+
+    loop {
+        // Fetch metrics every 2 s
+        if last_fetch.elapsed() >= poll_every {
+            metrics    = fetch_metrics(&url).await;
+            last_fetch = std::time::Instant::now();
+            tick      += 1;
+        }
+
+        term.draw(|f| draw_top(f, &metrics, &url, tick))?;
+
+        // Non-blocking key check (100ms timeout)
+        if event::poll(std::time::Duration::from_millis(100))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => break,
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    disable_raw_mode()?;
+    execute!(term.backend_mut(), LeaveAlternateScreen)?;
+    term.show_cursor()?;
+    Ok(())
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -779,6 +1195,9 @@ async fn main() {
 
 async fn run(cli: Cli) -> Result<()> {
     match cli.command {
+        // ── Init wizard ───────────────────────────────────────────────────────
+        Commands::Init { org } => cmd_init(org)?,
+
         // ── CA ────────────────────────────────────────────────────────────────
         Commands::Ca { action } => match action {
             CaCommands::Init { org, local, out, passphrase } => {
@@ -812,6 +1231,7 @@ async fn run(cli: Cli) -> Result<()> {
         Commands::Node { action } => match action {
             NodeCommands::PeerId { data_dir } => cmd_node_peer_id(data_dir)?,
             NodeCommands::Info   { data_dir } => cmd_node_info(data_dir)?,
+            NodeCommands::Top => cmd_node_top(cli.url).await?,
         },
 
         // ── Gateway API ───────────────────────────────────────────────────────
@@ -895,6 +1315,79 @@ async fn run(cli: Cli) -> Result<()> {
             let json: serde_json::Value = resp.json().await?;
             println!("{}", serde_json::to_string_pretty(&json)?);
         }
+
+        Commands::Contract { action } => match action {
+            ContractCommands::Deploy { name, wasm } => {
+                let bearer = get_bearer_token().context("ADMIN token required — run `qv identity token` first")?;
+                let wasm_bytes = std::fs::read(&wasm)
+                    .with_context(|| format!("Cannot read WASM file: {}", wasm.display()))?;
+
+                if !wasm_bytes.starts_with(b"\0asm") {
+                    bail!("File does not look like a WASM binary (magic bytes mismatch)");
+                }
+
+                let file_part = reqwest::multipart::Part::bytes(wasm_bytes)
+                    .file_name(format!("{}.wasm", name))
+                    .mime_str("application/wasm")?;
+                let form = reqwest::multipart::Form::new()
+                    .text("contract_id", name.clone())
+                    .part("wasm", file_part);
+
+                let client = reqwest::Client::new();
+                let base   = cli.url.trim_end_matches('/');
+                let resp = client
+                    .post(format!("{}/api/v1/contracts/deploy", base))
+                    .bearer_auth(&bearer)
+                    .multipart(form)
+                    .send().await.context("Request failed")?;
+
+                let json: serde_json::Value = resp.json().await?;
+                if json["success"].as_bool().unwrap_or(false) {
+                    let d = &json["data"];
+                    println!("Deployed contract '{}' ({} bytes) — status: {}",
+                        d["contract_id"].as_str().unwrap_or(&name),
+                        d["size_bytes"].as_u64().unwrap_or(0),
+                        d["status"].as_str().unwrap_or("unknown"),
+                    );
+                } else {
+                    bail!("Deploy failed: {}", json["error"]["message"].as_str().unwrap_or("unknown"));
+                }
+            }
+
+            ContractCommands::List => {
+                let bearer = get_bearer_token().ok();
+                let client = reqwest::Client::new();
+                let base   = cli.url.trim_end_matches('/');
+                let req    = client.get(format!("{}/api/v1/contracts", base));
+                let json   = send_api(&client, req, bearer).await?;
+
+                let contracts = json["data"]["contracts"].as_array()
+                    .cloned()
+                    .unwrap_or_default();
+
+                if contracts.is_empty() {
+                    println!("No contracts deployed.");
+                } else {
+                    let mut table = Table::new();
+                    table.load_preset(UTF8_FULL);
+                    table.set_header(vec!["Contract ID", "Kind", "Functions"]);
+                    for c in &contracts {
+                        let fns = c["functions"].as_array()
+                            .map(|a| a.iter()
+                                .filter_map(|v| v.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", "))
+                            .unwrap_or_default();
+                        table.add_row(vec![
+                            c["id"].as_str().unwrap_or("-"),
+                            c["kind"].as_str().unwrap_or("-"),
+                            &fns,
+                        ]);
+                    }
+                    println!("{table}");
+                }
+            }
+        },
     }
     Ok(())
 }

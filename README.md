@@ -51,95 +51,103 @@ curl -X POST http://localhost:8080/api/v1/auth/login \
 
 ## Production: Single Node
 
-### 1. Build binary node
+### 1. Build
 
 ```bash
-# setup.sh sudah install qv — tinggal build binary node untuk production
 cargo build --release -p qorvum-node
-# Binary: ./target/release/qorvum-node
+cargo install --path crates/qorvum-cli   # install / update qv CLI
 ```
 
-### 2. Setup CA (satu kali, di mesin admin)
+### 2. Wizard setup (satu kali)
 
 ```bash
-qv ca init \
-  --org Org1 \
-  --out ./org1-ca \
-  --passphrase <CA_PASSPHRASE>
+qv init
 ```
 
-Output:
+Wizard interaktif akan memandu langkah demi langkah:
+
 ```
-✓ CA keypair generated (Dilithium3)
-✓ CA self-signed certificate → ./org1-ca/ca.cert
-✓ CA private key (encrypted)  → ./org1-ca/ca.key
+  ╔══════════════════════════════════════════════╗
+  ║   Qorvum Setup Wizard                        ║
+  ╚══════════════════════════════════════════════╝
+
+? Organization name › MyOrg
+? Admin username › admin
+? Node role › ❯ all (validator + gateway + peer)
+? Gateway listen address › 0.0.0.0:8080
+? P2P listen address › /ip4/0.0.0.0/tcp/7051
+? Data directory › ./data
+? CA passphrase › ****
+? Confirm passphrase › ****
+
+  Summary
+  ───────────────────────────────────────────
+  Org      : MyOrg
+  Admin    : admin [ADMIN]
+  Role     : all
+  ...
+
+? Proceed? › Yes
+
+  Initializing CA... done
+  Issuing admin certificate... done
+  Setting active identity... done
+  Writing config/node.yaml... done
+
+  Start your node:
+    cargo run -p qorvum-node
 ```
 
-Direktori CA yang terbentuk:
-```
-org1-ca/
-├── ca.cert     ← Didistribusikan ke semua node (PUBLIC)
-├── ca.key      ← Kunci privat CA — JANGAN DIBAGIKAN
-├── ca.json     ← Metadata CA
-├── crl.json    ← Certificate Revocation List
-├── certs/      ← Sertifikat yang pernah diterbitkan
-└── users/      ← Keypair user terenkripsi
-```
+Setelah wizard selesai:
+- CA tersimpan di `~/.qorvum/ca/<org>/`
+- Identitas aktif di-set ke `admin`
+- `config/node.yaml` ditulis otomatis
 
-> **Penting — `--out` wajib diperhatikan:**
->
-> Jika `--out` tidak diberikan, CA disimpan ke lokasi default: `~/.qorvum/ca/<org_lowercase>/`
->
-> Contoh: `qv ca init --org NadamaOrg` → CA tersimpan di `~/.qorvum/ca/nadamaorg/` (nama org dilowercased otomatis).
->
-> `--ca-dir` pada node harus menunjuk **tepat ke folder yang berisi `ca.cert`**, bukan ke parent-nya:
-> ```
-> # ✓ Benar
-> --ca-dir ~/.qorvum/ca/nadamaorg
->
-> # ✗ Salah — CA tidak ditemukan, node jalan tanpa PKI
-> --ca-dir ~/.qorvum
-> --ca-dir ~/.qorvum/ca
-> ```
-> Gunakan `--out ./org1-ca` agar lokasinya eksplisit dan mudah dirujuk.
-
-### 3. Terbitkan sertifikat admin
+### 3. Jalankan node
 
 ```bash
-qv ca issue \
-  --ca ./org1-ca \
-  --name admin \
-  --roles "ADMIN" \
-  --days 3650
-# Hasil: admin.cert + admin.key (di direktori saat ini)
+# Baca config/node.yaml otomatis
+./target/release/qorvum-node
 
-# Set sebagai identitas aktif di CLI
-qv identity use admin.cert admin.key
-qv identity show
-```
-
-Output `identity show`:
-```
-Subject  : admin@Org1
-Roles    : [ADMIN]
-Type     : User
-Expires  : 2036-05-14 (VALID)
-```
-
-### 4. Jalankan node
-
-```bash
-./target/release/qorvum-node --role all --data-dir ./data/node1 --listen 0.0.0.0:8080 --p2p-listen /ip4/0.0.0.0/tcp/7051 --ca-dir ./org1-ca --ca-passphrase <CA_PASSPHRASE>
+# Atau dengan custom config
+./target/release/qorvum-node --config config/node-prod.yaml
 ```
 
 Log startup yang diharapkan:
 ```
 Local peer id: 12D3KooW...
 Validator pubkey: a1b2c3d4...
-PKI loaded from "./org1-ca" — token verification enabled
+PKI loaded from "~/.qorvum/ca/myorg" — token verification enabled
 CA enrollment enabled — admin endpoints active
 [gateway] REST API ready at http://0.0.0.0:8080
 ```
+
+### 4. Live dashboard
+
+```bash
+# Di terminal lain (node harus sudah jalan)
+qv node top
+```
+
+```
+┌─ Qorvum Node ────────────────────────────────────────────────────────┐
+│ url: http://localhost:8080   uptime: 2h 15m 30s   [q] quit           │
+├──────────────────────────────────┬───────────────────────────────────┤
+│  Blockchain                      │  System                           │
+│  Height    1,234                 │  CPU  12.3%                       │
+│                                  │  ████░░░░░░                       │
+│  Disk      512 MB (RocksDB)      │  RAM  256 / 8192 MB               │
+│                                  │  ███░░░░░░░░  3%                  │
+├──────────────────────────────────┴───────────────────────────────────┤
+│  Recent Blocks                                                        │
+│  #1234   abc12345   12 tx   10:30:01                                 │
+│  #1233   def45678    8 tx   10:29:58                                 │
+│  #1232   ghi89012    5 tx   10:29:55                                 │
+└──────────────────────────────────────────────────────────────────────┘
+● Refreshing every 2s   last update: 10:30:03
+```
+
+Tekan `q` untuk keluar.
 
 ### 5. Bootstrap akun admin (satu kali)
 
@@ -347,6 +355,53 @@ iptables -A INPUT -p tcp --dport 7051 -j ACCEPT
 
 ---
 
+## Config File (`config/node.yaml`)
+
+Node membaca `config/node.yaml` (atau `config/node.yml`) secara otomatis saat startup. CLI flags dan environment variables selalu mengoverride nilai dari config file.
+
+```yaml
+# config/node.yaml
+org: MyOrg
+
+node:
+  role: all                            # all | validator | gateway | peer
+  listen: "0.0.0.0:8080"
+  p2p_listen: "/ip4/0.0.0.0/tcp/7051"
+  data_dir: "./data"
+  channel: main-channel
+  log_level: info
+
+ca:
+  dir: "~/.qorvum/ca/myorg"
+  # passphrase: direkomendasikan via env var QORVUM_CA_PASSPHRASE
+
+# validator_keys menerima tiga format:
+validator_keys:
+  - "./data/node2"            # path data dir → baca validator.key otomatis
+  - "./data/node2/validator.key"  # path langsung ke file
+  # - "abc123def456..."       # hex pubkey (cara manual)
+
+peers: []
+```
+
+### Penggunaan
+
+```bash
+# Default: baca config/node.yaml atau config/node.yml otomatis
+./target/release/qorvum-node
+
+# Custom config
+./target/release/qorvum-node --config config/node-prod.yaml
+
+# Via env var
+QORVUM_CONFIG=config/node2.yaml ./target/release/qorvum-node
+
+# CLI flag tetap mengoverride config file
+./target/release/qorvum-node --config config/node1.yaml --log-level debug
+```
+
+---
+
 ## Production: Multi-Node (2 Node, 1 LAN)
 
 > **Scope**: Tutorial ini untuk 2 node di mesin yang sama (2 terminal) atau 2 server di satu LAN. Peer discovery menggunakan mDNS — bekerja di loopback dan LAN, belum mendukung cross-network (antar subnet berbeda).
@@ -363,8 +418,13 @@ node1 melayani REST API dan berpartisipasi dalam consensus. node2 hanya validato
 
 ---
 
-### Langkah 1 — Setup CA (sama seperti single-node, skip jika sudah)
+### Langkah 1 — Setup (satu kali)
 
+```bash
+qv init   # wizard interaktif: buat CA, admin cert, config/node.yaml
+```
+
+Atau manual:
 ```bash
 qv ca init --org Org1 --out ./org1-ca --passphrase <CA_PASSPHRASE>
 qv ca issue --ca ./org1-ca --name admin --roles "ADMIN" --days 3650
@@ -373,51 +433,72 @@ qv identity use admin.cert admin.key
 
 ### Langkah 2 — Generate validator keypair (satu kali per node)
 
-Validator keypair di-generate otomatis pada run pertama dan disimpan di `{data-dir}/validator.key`. Jalankan setiap node sebentar lalu Ctrl+C:
+Validator keypair di-generate otomatis saat node pertama kali jalan. Jalankan sebentar lalu Ctrl+C:
 
-**Terminal 1 — node1:**
 ```bash
+# Terminal 1
 ./target/release/qorvum-node --role all --data-dir ./data/node1 --p2p-listen /ip4/0.0.0.0/tcp/7051 --listen 0.0.0.0:8080
 # Tunggu "[gateway] REST API ready" → Ctrl+C
-```
 
-**Terminal 2 — node2:**
-```bash
+# Terminal 2
 ./target/release/qorvum-node --role validator --data-dir ./data/node2 --p2p-listen /ip4/0.0.0.0/tcp/7052
 # Tunggu "[peer] P2P network running" → Ctrl+C
 ```
 
-Ambil validator pubkey (hex) lewat CLI:
+### Langkah 3 — Buat config file per node
 
-```bash
-NODE1_PUBKEY=$(qv node peer-id --data-dir ./data/node1 | grep -E '^[0-9a-f]{100,}$')
-NODE2_PUBKEY=$(qv node peer-id --data-dir ./data/node2 | grep -E '^[0-9a-f]{100,}$')
+**`config/node1.yaml`:**
+```yaml
+node:
+  role: all
+  listen: "0.0.0.0:8080"
+  p2p_listen: "/ip4/0.0.0.0/tcp/7051"
+  data_dir: "./data/node1"
+  channel: main-channel
 
-echo "node1: $NODE1_PUBKEY"
-echo "node2: $NODE2_PUBKEY"
+ca:
+  dir: "~/.qorvum/ca/org1"
+  # passphrase via: export QORVUM_CA_PASSPHRASE=<secret>
+
+validator_keys:
+  - "./data/node2"    # baca ./data/node2/validator.key otomatis
+
+peers: []
 ```
 
-### Langkah 3 — Jalankan kedua node dengan PKI dan validator set lengkap
+**`config/node2.yaml`:**
+```yaml
+node:
+  role: validator
+  p2p_listen: "/ip4/0.0.0.0/tcp/7052"
+  data_dir: "./data/node2"
+  channel: main-channel
 
-**Terminal 1 — node1** (gateway + validator):
-```bash
-./target/release/qorvum-node --role all --data-dir ./data/node1 --listen 0.0.0.0:8080 --p2p-listen /ip4/0.0.0.0/tcp/7051 --ca-dir ./org1-ca --ca-passphrase <CA_PASSPHRASE> --validator-keys $NODE2_PUBKEY
+ca:
+  dir: "~/.qorvum/ca/org1"
+
+validator_keys:
+  - "./data/node1"    # baca ./data/node1/validator.key otomatis
+
+peers: []
 ```
 
-**Terminal 2 — node2** (validator):
+### Langkah 4 — Jalankan
+
 ```bash
-./target/release/qorvum-node --role validator --data-dir ./data/node2 --p2p-listen /ip4/0.0.0.0/tcp/7052 --validator-keys $NODE1_PUBKEY
+# Terminal 1
+QORVUM_CA_PASSPHRASE=<secret> ./target/release/qorvum-node --config config/node1.yaml
+
+# Terminal 2
+./target/release/qorvum-node --config config/node2.yaml
 ```
 
 Log yang diharapkan setelah keduanya jalan:
 ```
-# di node1 atau node2:
 mDNS discovered: 12D3KooWXxxxx...
 ```
 
-Ini menandakan kedua node sudah saling terhubung via gossipsub dan membentuk validator set bersama.
-
-### Langkah 4 — Bootstrap admin (sama seperti single-node)
+### Langkah 5 — Bootstrap admin dan verifikasi
 
 ```bash
 TOKEN=$(qv identity token --ttl 86400)
@@ -425,40 +506,52 @@ curl -X POST http://localhost:8080/api/v1/admin/users/enroll \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"adminpassword","roles":["ADMIN"],"days":3650}'
-```
 
-### Langkah 5 — Verifikasi cluster
-
-```bash
 curl http://localhost:8080/api/v1/health
-```
-```json
-{"status":"ok","channel":"main-channel","mode":"consensus","latest_block":null}
+# → {"status":"ok","mode":"consensus","latest_block":null}
 ```
 
-`"mode":"consensus"` menandakan node berjalan dengan HotStuff BFT aktif.
+`"mode":"consensus"` menandakan HotStuff BFT aktif.
 
 ### Untuk 2 Server di LAN yang Sama
 
-Prosesnya identik, ganti `localhost`/`0.0.0.0` dengan IP masing-masing server. mDNS bekerja di LAN, tapi disarankan tetap menggunakan `--bootstrap-peers` untuk koneksi yang lebih cepat dan deterministik.
+Prosesnya identik, ganti `0.0.0.0` dengan IP masing-masing server di config file. mDNS bekerja di LAN, tapi disarankan tambah `bootstrap-peers` untuk koneksi yang lebih cepat.
 
-```bash
-# Di server 1 (setelah run pertama lalu Ctrl+C):
-NODE1_PUBKEY=$(qv node peer-id --data-dir /var/lib/qorvum/node1 | grep -E '^[0-9a-f]{100,}$')
-NODE1_PEER_ID="<lihat log: Local peer id: 12D3KooW...>"
-# Di server 2 (setelah run pertama lalu Ctrl+C):
-NODE2_PUBKEY=$(qv node peer-id --data-dir /var/lib/qorvum/node2 | grep -E '^[0-9a-f]{100,}$')
-NODE2_PEER_ID="<lihat log: Local peer id: 12D3KooW...>"
+**`config/node1.yaml`** (server `10.0.0.1`):
+```yaml
+node:
+  role: all
+  listen: "0.0.0.0:8080"
+  p2p_listen: "/ip4/10.0.0.1/tcp/7051"
+  data_dir: "/var/lib/qorvum/node1"
+  channel: main-channel
+
+ca:
+  dir: "/etc/qorvum/ca"
+
+validator_keys:
+  - "/var/lib/qorvum/node2"
+
+peers:
+  - "/ip4/10.0.0.2/tcp/7051/p2p/<NODE2_PEER_ID>"
 ```
 
-**Server 1** (`10.0.0.1`) — gateway + validator:
-```bash
-./target/release/qorvum-node --role all --data-dir /var/lib/qorvum/node1 --listen 0.0.0.0:8080 --p2p-listen /ip4/10.0.0.1/tcp/7051 --ca-dir /etc/qorvum/ca --ca-passphrase <CA_PASSPHRASE> --validator-keys $NODE2_PUBKEY --bootstrap-peers /ip4/10.0.0.2/tcp/7051/p2p/$NODE2_PEER_ID
-```
+**`config/node2.yaml`** (server `10.0.0.2`):
+```yaml
+node:
+  role: validator
+  p2p_listen: "/ip4/10.0.0.2/tcp/7051"
+  data_dir: "/var/lib/qorvum/node2"
+  channel: main-channel
 
-**Server 2** (`10.0.0.2`) — validator:
-```bash
-./target/release/qorvum-node --role validator --data-dir /var/lib/qorvum/node2 --p2p-listen /ip4/10.0.0.2/tcp/7051 --validator-keys $NODE1_PUBKEY --bootstrap-peers /ip4/10.0.0.1/tcp/7051/p2p/$NODE1_PEER_ID
+ca:
+  dir: "/etc/qorvum/ca"
+
+validator_keys:
+  - "/var/lib/qorvum/node1"
+
+peers:
+  - "/ip4/10.0.0.1/tcp/7051/p2p/<NODE1_PEER_ID>"
 ```
 
 Distribusi CA ke server 2:
@@ -473,7 +566,7 @@ scp ./org1-ca/crl.json user@10.0.0.2:/etc/qorvum/ca/
 
 ## Production: Multi-Node (3 Node, 1 LAN)
 
-> **Scope**: 3 validator memberikan quorum 2 dari 3 — bisa tolerir 1 crash node tapi belum bisa tolerir Byzantine fault. Untuk BFT yang benar-benar toleran terhadap node jahat, butuh minimal 4 node (quorum 3 dari 4, tolerir 1 Byzantine). Peer discovery via mDNS — bekerja di LAN / loopback.
+> **Scope**: 3 validator memberikan quorum 2 dari 3 — bisa tolerir 1 crash node. Untuk toleransi Byzantine fault penuh butuh minimal 4 node. Peer discovery via mDNS — bekerja di LAN / loopback.
 
 Topologi:
 ```
@@ -484,70 +577,87 @@ Client ──► node1 (gateway + validator)  :8080 / P2P :7051
            node3 (validator)             P2P :7053
 ```
 
-### Langkah 1 — Setup CA (skip jika sudah)
+### Langkah 1 — Setup (satu kali)
 
 ```bash
-qv ca init --org Org1 --out ./org1-ca --passphrase <CA_PASSPHRASE>
-qv ca issue --ca ./org1-ca --name admin --roles "ADMIN" --days 3650
-qv identity use admin.cert admin.key
+qv init   # atau manual: qv ca init + qv ca issue + qv identity use
 ```
 
 ### Langkah 2 — Generate validator keypair (satu kali per node)
 
-Jalankan setiap node sebentar lalu Ctrl+C:
-
 ```bash
-# Terminal 1
-./target/release/qorvum-node --role all --data-dir ./data/node1 --p2p-listen /ip4/0.0.0.0/tcp/7051 --listen 0.0.0.0:8080
-# Terminal 2
+# Jalankan sebentar lalu Ctrl+C di masing-masing terminal
+./target/release/qorvum-node --role all       --data-dir ./data/node1 --p2p-listen /ip4/0.0.0.0/tcp/7051 --listen 0.0.0.0:8080
 ./target/release/qorvum-node --role validator --data-dir ./data/node2 --p2p-listen /ip4/0.0.0.0/tcp/7052
-# Terminal 3
 ./target/release/qorvum-node --role validator --data-dir ./data/node3 --p2p-listen /ip4/0.0.0.0/tcp/7053
-# Tunggu "[gateway|peer] ready" di masing-masing → Ctrl+C semua
 ```
 
-Ambil pubkey (hex) semua node:
+### Langkah 3 — Buat config file per node
 
-```bash
-NODE1_PUBKEY=$(qv node peer-id --data-dir ./data/node1 | grep -E '^[0-9a-f]{100,}$')
-NODE2_PUBKEY=$(qv node peer-id --data-dir ./data/node2 | grep -E '^[0-9a-f]{100,}$')
-NODE3_PUBKEY=$(qv node peer-id --data-dir ./data/node3 | grep -E '^[0-9a-f]{100,}$')
+**`config/node1.yaml`:**
+```yaml
+node:
+  role: all
+  listen: "0.0.0.0:8080"
+  p2p_listen: "/ip4/0.0.0.0/tcp/7051"
+  data_dir: "./data/node1"
 
-echo "node1: $NODE1_PUBKEY"
-echo "node2: $NODE2_PUBKEY"
-echo "node3: $NODE3_PUBKEY"
+ca:
+  dir: "~/.qorvum/ca/org1"
+  # passphrase via: export QORVUM_CA_PASSPHRASE=<secret>
+
+validator_keys:
+  - "./data/node2"
+  - "./data/node3"
 ```
 
-### Langkah 3 — Jalankan semua node dengan validator set lengkap
+**`config/node2.yaml`:**
+```yaml
+node:
+  role: validator
+  p2p_listen: "/ip4/0.0.0.0/tcp/7052"
+  data_dir: "./data/node2"
 
-Setiap node butuh pubkey **kedua node lainnya** via `--validator-keys`.
+ca:
+  dir: "~/.qorvum/ca/org1"
 
-**Terminal 1 — node1** (gateway + validator):
-```bash
-./target/release/qorvum-node --role all --data-dir ./data/node1 --listen 0.0.0.0:8080 --p2p-listen /ip4/0.0.0.0/tcp/7051 --ca-dir ./org1-ca --ca-passphrase <CA_PASSPHRASE> --validator-keys $NODE2_PUBKEY,$NODE3_PUBKEY
+validator_keys:
+  - "./data/node1"
+  - "./data/node3"
 ```
 
-**Terminal 2 — node2** (validator):
-```bash
-./target/release/qorvum-node --role validator --data-dir ./data/node2 --p2p-listen /ip4/0.0.0.0/tcp/7052 --validator-keys $NODE1_PUBKEY,$NODE3_PUBKEY
+**`config/node3.yaml`:**
+```yaml
+node:
+  role: validator
+  p2p_listen: "/ip4/0.0.0.0/tcp/7053"
+  data_dir: "./data/node3"
+
+ca:
+  dir: "~/.qorvum/ca/org1"
+
+validator_keys:
+  - "./data/node1"
+  - "./data/node2"
 ```
 
-**Terminal 3 — node3** (validator):
+### Langkah 4 — Jalankan
+
 ```bash
-./target/release/qorvum-node --role validator --data-dir ./data/node3 --p2p-listen /ip4/0.0.0.0/tcp/7053 --validator-keys $NODE1_PUBKEY,$NODE2_PUBKEY
+QORVUM_CA_PASSPHRASE=<secret> ./target/release/qorvum-node --config config/node1.yaml
+./target/release/qorvum-node --config config/node2.yaml
+./target/release/qorvum-node --config config/node3.yaml
 ```
 
-### Langkah 4 — Bootstrap admin dan verifikasi
+### Langkah 5 — Bootstrap admin dan verifikasi
 
 ```bash
-# Bootstrap admin
 TOKEN=$(qv identity token --ttl 86400)
 curl -X POST http://localhost:8080/api/v1/admin/users/enroll \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"adminpassword","roles":["ADMIN"],"days":3650}'
 
-# Verifikasi cluster
 curl http://localhost:8080/api/v1/health
 # → {"status":"ok","mode":"consensus","latest_block":null}
 ```
@@ -558,45 +668,37 @@ Coba matikan satu validator (node2 atau node3) — consensus tetap jalan karena 
 
 ### Untuk 3 Server di LAN yang Sama
 
-Prosesnya identik, ganti `localhost`/`0.0.0.0` dengan IP masing-masing server. Gunakan `--bootstrap-peers` agar koneksi antar node cepat dan deterministik.
+Buat config file per server dengan IP yang sesuai, tambahkan `peers` untuk bootstrap koneksi:
 
-Ambil pubkey dan PeerId masing-masing setelah run pertama (lalu Ctrl+C):
-```bash
-# Di server 1:
-NODE1_PUBKEY=$(qv node peer-id --data-dir /var/lib/qorvum/node1 | grep -E '^[0-9a-f]{100,}$')
-NODE1_PEER_ID="<log: Local peer id: 12D3KooW...>"
-# Di server 2:
-NODE2_PUBKEY=$(qv node peer-id --data-dir /var/lib/qorvum/node2 | grep -E '^[0-9a-f]{100,}$')
-NODE2_PEER_ID="<log: Local peer id: 12D3KooW...>"
-# Di server 3:
-NODE3_PUBKEY=$(qv node peer-id --data-dir /var/lib/qorvum/node3 | grep -E '^[0-9a-f]{100,}$')
-NODE3_PEER_ID="<log: Local peer id: 12D3KooW...>"
+**`config/node1.yaml`** (server `10.0.0.1`):
+```yaml
+node:
+  role: all
+  listen: "0.0.0.0:8080"
+  p2p_listen: "/ip4/10.0.0.1/tcp/7051"
+  data_dir: "/var/lib/qorvum/node1"
+
+ca:
+  dir: "/etc/qorvum/ca"
+
+validator_keys:
+  - "/var/lib/qorvum/node2"
+  - "/var/lib/qorvum/node3"
+
+peers:
+  - "/ip4/10.0.0.2/tcp/7051/p2p/<NODE2_PEER_ID>"
+  - "/ip4/10.0.0.3/tcp/7051/p2p/<NODE3_PEER_ID>"
 ```
 
-**Server 1** (`10.0.0.1`) — gateway + validator:
-```bash
-./target/release/qorvum-node --role all --data-dir /var/lib/qorvum/node1 --listen 0.0.0.0:8080 --p2p-listen /ip4/10.0.0.1/tcp/7051 --ca-dir /etc/qorvum/ca --ca-passphrase <CA_PASSPHRASE> --validator-keys $NODE2_PUBKEY,$NODE3_PUBKEY --bootstrap-peers /ip4/10.0.0.2/tcp/7051/p2p/$NODE2_PEER_ID,/ip4/10.0.0.3/tcp/7051/p2p/$NODE3_PEER_ID
-```
-
-**Server 2** (`10.0.0.2`) — validator:
-```bash
-./target/release/qorvum-node --role validator --data-dir /var/lib/qorvum/node2 --p2p-listen /ip4/10.0.0.2/tcp/7051 --validator-keys $NODE1_PUBKEY,$NODE3_PUBKEY --bootstrap-peers /ip4/10.0.0.1/tcp/7051/p2p/$NODE1_PEER_ID,/ip4/10.0.0.3/tcp/7051/p2p/$NODE3_PEER_ID
-```
-
-**Server 3** (`10.0.0.3`) — validator:
-```bash
-./target/release/qorvum-node --role validator --data-dir /var/lib/qorvum/node3 --p2p-listen /ip4/10.0.0.3/tcp/7051 --validator-keys $NODE1_PUBKEY,$NODE2_PUBKEY --bootstrap-peers /ip4/10.0.0.1/tcp/7051/p2p/$NODE1_PEER_ID,/ip4/10.0.0.2/tcp/7051/p2p/$NODE2_PEER_ID
-```
+> `NODE_PEER_ID` (`12D3KooW...`) tampil di log saat node pertama kali jalan. `ca.key` hanya dibutuhkan di node gateway; validator cukup `ca.cert` + `crl.json`.
 
 Distribusi file CA ke server 2 dan 3:
 ```bash
-scp ./org1-ca/ca.cert user@10.0.0.2:/etc/qorvum/ca/
+scp ./org1-ca/ca.cert  user@10.0.0.2:/etc/qorvum/ca/
 scp ./org1-ca/crl.json user@10.0.0.2:/etc/qorvum/ca/
-scp ./org1-ca/ca.cert user@10.0.0.3:/etc/qorvum/ca/
+scp ./org1-ca/ca.cert  user@10.0.0.3:/etc/qorvum/ca/
 scp ./org1-ca/crl.json user@10.0.0.3:/etc/qorvum/ca/
 ```
-
-> `ca.key` dan `ca_passphrase` hanya dibutuhkan di node yang menjalankan enrollment (biasanya node1/gateway). Node validator cukup `ca.cert` + `crl.json` untuk verifikasi.
 
 ---
 
@@ -743,16 +845,26 @@ curl -H "Authorization: Bearer $TOKEN" \
 ## CLI (`qv`)
 
 ```bash
+# Setup wizard — buat CA, admin cert, dan config/node.yaml sekaligus
+qv init [--org <ORG>]
+
 # CA
-qv ca init   --org <ORG> --out <DIR> --passphrase <PASS>
-qv ca issue  --ca <DIR> --name <NAME> --roles <ROLES> --days <N>
-qv ca revoke --ca <DIR> --cert <FILE>
-qv ca list   --ca <DIR>
+qv ca init   --org <ORG> [--out <DIR>] [--passphrase <PASS>]
+qv ca issue  --org <ORG> --name <NAME> --roles <ROLES> [--days <N>]
+qv ca revoke --org <ORG> --cert <FILE>
+qv ca list   --org <ORG>
 
 # Identity
 qv identity use   <CERT> <KEY>
 qv identity show
 qv identity token [--ttl <SECONDS>]
+qv identity list
+qv identity verify <TOKEN_OR_CERT>
+
+# Node
+qv node top              # live dashboard (tekan q untuk keluar)
+qv node info             # info keypair dan ledger
+qv node peer-id          # tampilkan validator pubkey
 
 # API
 qv invoke  <contract> <function> --args '<json>'
@@ -761,14 +873,32 @@ qv get     <collection> <partition> <id>
 qv list    <collection>
 qv block   <number>
 qv health
+
+# Contract
+qv contract deploy --name <ID> --wasm <FILE>
+qv contract list
 ```
+
+**Environment variables `qv`:**
 
 | Env Var | Default | |
 |---|---|---|
 | `QORVUM_URL` | `http://localhost:8080` | URL gateway |
+
+**Environment variables `qorvum-node`:**
+
+| Env Var | Default | |
+|---|---|---|
+| `QORVUM_CONFIG` | — | Path config file |
+| `QORVUM_ROLE` | `all` | Role node |
+| `QORVUM_LISTEN` | `0.0.0.0:8080` | Alamat REST API |
+| `QORVUM_P2P_LISTEN` | `/ip4/0.0.0.0/tcp/7051` | Alamat P2P |
+| `QORVUM_DATA_DIR` | `./data/node1` | Direktori RocksDB |
 | `QORVUM_CA_DIR` | `./ca` | Direktori CA |
-| `QORVUM_CA_PASSPHRASE` | — | Passphrase CA |
-| `QORVUM_DATA_DIR` | `./data` | Direktori data |
+| `QORVUM_CA_PASSPHRASE` | — | Passphrase CA key |
+| `QORVUM_VALIDATOR_KEYS` | — | Hex pubkeys atau paths, koma-separated |
+| `QORVUM_BOOTSTRAP_PEERS` | — | Multiaddr peers, koma-separated |
+| `RUST_LOG` | `info` | Log level |
 
 ---
 
@@ -919,7 +1049,7 @@ cargo test -p qorvum-network  # PQ-TLS handshake
 | 5 | ✅ | REST auth, user management, role-based node |
 | 5.2 | ✅ | Bootstrap peer dial (cross-network P2P) |
 | 5.3 | ✅ | PQ-TLS di layer P2P (Kyber-1024 KEM + X25519 + AES-256-GCM) |
-| 6 | 🔄 | WASM contract — SDK + todo-as contract selesai; WASM executor di node menyusul |
+| 6 | ✅ | WASM contract — SDK, todo-as, hot deploy, persisted ke disk (survive restart) |
 | 7 | ⏳ | Docker, Helm, Prometheus |
 | 8 | ⏳ | HSM, cross-org federation |
 

@@ -108,6 +108,10 @@ pub struct Cli {
     /// Can be specified multiple times for multiple bootstrap peers.
     #[arg(long, env = "QORVUM_BOOTSTRAP_PEERS", value_delimiter = ',')]
     pub bootstrap_peers: Vec<String>,
+
+    /// Path to a YAML config file. Defaults to config/node.yml or config/node.yaml.
+    #[arg(long, env = "QORVUM_CONFIG")]
+    pub config: Option<PathBuf>,
 }
 
 impl Cli {
@@ -124,11 +128,161 @@ impl Cli {
     }
 }
 
+// ── config/node.yml ───────────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize, Default)]
+struct NodeConfig {
+    #[serde(default)]
+    node: NodeSection,
+    #[serde(default)]
+    ca: CaSection,
+    #[serde(default)]
+    peers: Vec<String>,
+    #[serde(default)]
+    validator_keys: Vec<String>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct NodeSection {
+    role:       Option<String>,
+    listen:     Option<String>,
+    p2p_listen: Option<String>,
+    data_dir:   Option<String>,
+    channel:    Option<String>,
+    log_level:  Option<String>,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct CaSection {
+    dir:        Option<String>,
+    passphrase: Option<String>,
+}
+
+fn load_node_config(explicit: Option<&std::path::Path>) -> NodeConfig {
+    let candidates: Vec<&std::path::Path> = if let Some(p) = explicit {
+        vec![p]
+    } else {
+        vec![
+            std::path::Path::new("config/node.yml"),
+            std::path::Path::new("config/node.yaml"),
+        ]
+    };
+
+    for path in candidates {
+        if path.exists() {
+            return match std::fs::read_to_string(path) {
+                Ok(s) => serde_yaml::from_str(&s).unwrap_or_else(|e| {
+                    eprintln!("[warn] {} parse error: {e} — using defaults", path.display());
+                    NodeConfig::default()
+                }),
+                Err(e) => {
+                    eprintln!("[warn] cannot read {}: {e}", path.display());
+                    NodeConfig::default()
+                }
+            };
+        } else if explicit.is_some() {
+            eprintln!("[warn] config file not found: {}", path.display());
+        }
+    }
+    NodeConfig::default()
+}
+
+/// Apply config/node.yml values where CLI still holds the default (env not set).
+/// CLI args always win; config file fills in what's missing.
+fn apply_config(cli: &mut Cli, cfg: NodeConfig) {
+    let env_set = |var: &str| std::env::var(var).is_ok();
+
+    if !env_set("QORVUM_ROLE") && cli.role == vec![NodeRole::All] {
+        if let Some(r) = &cfg.node.role {
+            if let Ok(parsed) = r.parse::<NodeRole>() {
+                cli.role = vec![parsed];
+            }
+        }
+    }
+    macro_rules! fill {
+        ($field:expr, $val:expr, $env:literal) => {
+            if !env_set($env) {
+                if let Some(v) = $val { $field = v; }
+            }
+        };
+    }
+    fill!(cli.listen,     cfg.node.listen,     "QORVUM_LISTEN");
+    fill!(cli.p2p_listen, cfg.node.p2p_listen, "QORVUM_P2P_LISTEN");
+    fill!(cli.data_dir,   cfg.node.data_dir,   "QORVUM_DATA_DIR");
+    fill!(cli.channel,    cfg.node.channel,    "QORVUM_CHANNEL");
+    fill!(cli.log_level,  cfg.node.log_level,  "RUST_LOG");
+
+    if !env_set("QORVUM_CA_DIR") {
+        if let Some(d) = cfg.ca.dir { cli.ca_dir = d.into(); }
+    }
+    if !env_set("QORVUM_CA_PASSPHRASE") && cli.ca_passphrase.is_none() {
+        cli.ca_passphrase = cfg.ca.passphrase;
+    }
+    if !env_set("QORVUM_BOOTSTRAP_PEERS") && cli.bootstrap_peers.is_empty() {
+        cli.bootstrap_peers = cfg.peers;
+    }
+    if !env_set("QORVUM_VALIDATOR_KEYS") && cli.validator_keys.is_empty() {
+        cli.validator_keys = cfg.validator_keys.into_iter()
+            .filter_map(|v| resolve_validator_key(&v))
+            .collect();
+    }
+}
+
+/// Jika value adalah path file yang ada, baca dan extract hex pubkey dari validator.key.
+/// Jika bukan path (hex string biasa), kembalikan as-is.
+fn resolve_validator_key(val: &str) -> Option<String> {
+    let path = std::path::Path::new(val);
+    // Anggap path jika mengandung separator atau ekstensi .key
+    let looks_like_path = val.contains('/') || val.contains('\\') || val.ends_with(".key");
+
+    if looks_like_path {
+        // Coba baca sebagai file; kalau tidak ada, coba tambahkan /validator.key
+        let key_path = if path.is_file() {
+            path.to_path_buf()
+        } else {
+            path.join("validator.key")
+        };
+
+        match std::fs::read(&key_path) {
+            Ok(bytes) => {
+                match bincode::deserialize::<(u8, Vec<u8>, Vec<u8>)>(&bytes) {
+                    Ok((_alg, pk_bytes, _sk)) => Some(hex::encode(&pk_bytes)),
+                    Err(e) => {
+                        eprintln!("[warn] validator key file {:?} corrupt: {e}", key_path);
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("[warn] cannot read validator key {:?}: {e}", key_path);
+                None
+            }
+        }
+    } else {
+        Some(val.to_string())
+    }
+}
+
+impl std::str::FromStr for NodeRole {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "validator" => Ok(NodeRole::Validator),
+            "gateway"   => Ok(NodeRole::Gateway),
+            "peer"      => Ok(NodeRole::Peer),
+            "all"       => Ok(NodeRole::All),
+            other       => Err(format!("unknown role: {other}")),
+        }
+    }
+}
+
 // ── Entry Point ───────────────────────────────────────────────────────────────
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let mut cli  = Cli::parse();
+    let node_cfg = load_node_config(cli.config.as_deref());
+    apply_config(&mut cli, node_cfg);
 
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new(&cli.log_level))
@@ -227,6 +381,7 @@ async fn main() -> Result<()> {
         let gateway_role = GatewayRole::new(
             cli.listen.clone(),
             cli.channel.clone(),
+            cli.data_dir.clone(),
             cli.ca_dir.clone(),
             cli.ca_passphrase.clone(),
             store.clone(),

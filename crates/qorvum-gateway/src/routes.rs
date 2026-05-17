@@ -31,6 +31,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/health",          get(handlers::health))
         .route("/stats",           get(handlers::get_stats))
         .route("/auth/login",      post(handlers::auth_login))
+        .route("/metrics",         get(handlers::get_metrics))
         // Bootstrap hanya aktif kalau belum ada user — auto-reject setelahnya
         .route("/auth/bootstrap",  post(auth_handlers::auth_bootstrap))
         // WebSocket stream — real-time explorer, token optional via ?token=
@@ -49,6 +50,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/history/:collection/:id",                get(handlers::get_history))
         // Block explorer — list + detail
         .route("/contracts",                              get(handlers::list_contracts))
+        .route("/contracts/deploy",                       post(handlers::deploy_contract))
         .route("/blocks",                                 get(handlers::list_blocks))
         .route("/blocks/:number",                         get(handlers::get_block))
         // Admin

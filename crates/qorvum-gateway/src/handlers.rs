@@ -4,7 +4,7 @@ use crate::error::ApiError;
 use crate::middleware::CallerIdentity;
 use crate::state::AppState;
 use axum::{
-    extract::{Extension, Path, Query, State},
+    extract::{Extension, Multipart, Path, Query, State},
     response::Json,
 };
 use qorvum_ledger::{
@@ -315,11 +315,20 @@ pub async fn list_blocks(
 pub async fn get_stats(State(state): State<Arc<AppState>>) -> Json<Value> {
     let latest = state.store.get_latest_block_num().unwrap_or(None);
     let mode   = if state.consensus.is_some() { "consensus" } else { "dev" };
+
+    // Sum tx_count across all committed blocks
+    let total_tx: u64 = latest.map(|n| {
+        (0..=n).filter_map(|i| state.store.get_block(i).ok()?)
+               .map(|b| b.metadata.tx_count as u64)
+               .sum()
+    }).unwrap_or(0);
+
     Json(json!({
         "success": true,
         "data": {
             "channel":      state.channel_id,
             "block_height": latest,
+            "total_tx":     total_tx,
             "mode":         mode,
             "version":      env!("CARGO_PKG_VERSION"),
         }
@@ -335,6 +344,71 @@ pub async fn list_contracts(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({ "success": true, "data": { "contracts": contracts, "total": total } }))
 }
 
+// ── POST /api/v1/contracts/deploy ────────────────────────────────────────────
+// Multipart form: field "contract_id" (text) + field "wasm" (binary file)
+
+pub async fn deploy_contract(
+    State(state):   State<Arc<AppState>>,
+    Extension(caller): Extension<CallerIdentity>,
+    mut multipart:  Multipart,
+) -> Result<Json<Value>, ApiError> {
+    require_admin(&caller)?;
+
+    let mut contract_id: Option<String> = None;
+    let mut wasm_bytes:  Option<Vec<u8>> = None;
+
+    while let Some(field) = multipart.next_field().await
+        .map_err(|e| ApiError::BadRequest(format!("multipart error: {e}")))?
+    {
+        match field.name() {
+            Some("contract_id") => {
+                let text = field.text().await
+                    .map_err(|e| ApiError::BadRequest(format!("contract_id read error: {e}")))?;
+                contract_id = Some(text.trim().to_string());
+            }
+            Some("wasm") => {
+                let bytes = field.bytes().await
+                    .map_err(|e| ApiError::BadRequest(format!("wasm read error: {e}")))?;
+                wasm_bytes = Some(bytes.to_vec());
+            }
+            _ => {}
+        }
+    }
+
+    let contract_id = contract_id
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("missing field: contract_id".into()))?;
+    let wasm_bytes = wasm_bytes
+        .filter(|b| !b.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("missing field: wasm".into()))?;
+
+    if !wasm_bytes.starts_with(b"\0asm") {
+        return Err(ApiError::BadRequest("not a valid WASM binary (magic bytes mismatch)".into()));
+    }
+
+    let size = wasm_bytes.len();
+    {
+        let mut executor = state.executor.write().await;
+        executor.deploy_wasm(&contract_id, wasm_bytes);
+    }
+
+    tracing::info!("Hot-deployed WASM contract '{}' ({} bytes) by {}", contract_id, size, caller.id);
+    state.broadcaster.tx_committed(
+        format!("deploy:{}", contract_id),
+        0,
+        contract_id.clone(),
+        "deploy".to_string(),
+        caller.id.clone(),
+        true,
+    );
+
+    Ok(ok(json!({
+        "contract_id": contract_id,
+        "size_bytes":  size,
+        "status":      "deployed",
+    })))
+}
+
 // ── GET /api/v1/health ────────────────────────────────────────────────────────
 
 pub async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
@@ -347,6 +421,71 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<Value> {
         "mode":         mode,
         "version":      env!("CARGO_PKG_VERSION"),
     }))
+}
+
+// ── GET /api/v1/metrics ───────────────────────────────────────────────────────
+
+pub async fn get_metrics(State(state): State<Arc<AppState>>) -> Json<Value> {
+    use sysinfo::System;
+    let mut sys = System::new_all();
+    sys.refresh_all();
+
+    let cpu_usage = sys.global_cpu_usage();
+    let mem_used  = sys.used_memory();
+    let mem_total = sys.total_memory();
+    let mem_pct   = if mem_total > 0 {
+        (mem_used as f64 / mem_total as f64 * 100.0) as u64
+    } else { 0 };
+
+    let uptime_secs = state.start_time.elapsed().as_secs();
+
+    let block_height = state.store.get_latest_block_num()
+        .unwrap_or(None)
+        .unwrap_or(0);
+
+    // Collect last 5 blocks for the TUI dashboard
+    let mut recent_blocks = Vec::new();
+    for n in (0..=block_height).rev().take(5) {
+        if let Ok(Some(b)) = state.store.get_block(n) {
+            recent_blocks.push(json!({
+                "number":    b.header.block_number,
+                "tx_count":  b.transactions.len(),
+                "hash":      hex::encode(&b.metadata.block_hash[..4]),
+                "timestamp": b.header.timestamp / 1_000_000_000,
+            }));
+        }
+    }
+
+    // Walk data dir to calculate RocksDB disk usage
+    let disk_mb = dir_size_mb(&state.data_dir);
+
+    Json(json!({
+        "success": true,
+        "data": {
+            "block_height":  block_height,
+            "uptime_secs":   uptime_secs,
+            "cpu_percent":   (cpu_usage * 10.0).round() / 10.0,
+            "mem_used_mb":   mem_used  / 1024 / 1024,
+            "mem_total_mb":  mem_total / 1024 / 1024,
+            "mem_percent":   mem_pct,
+            "disk_mb":       disk_mb,
+            "recent_blocks": recent_blocks,
+        }
+    }))
+}
+
+fn dir_size_mb(path: &str) -> u64 {
+    fn walk(p: &std::path::Path) -> u64 {
+        let Ok(entries) = std::fs::read_dir(p) else { return 0 };
+        entries.flatten().map(|e| {
+            let p = e.path();
+            if p.is_dir() { walk(&p) } else {
+                std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0)
+            }
+        }).sum()
+    }
+    let ledger = std::path::Path::new(path).join("ledger");
+    walk(&ledger) / 1024 / 1024
 }
 
 // ── Helper: require ADMIN role ────────────────────────────────────────────────

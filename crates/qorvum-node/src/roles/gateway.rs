@@ -8,6 +8,33 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{info, warn};
 
+/// Scan `./contracts/` for pre-built WASM release artifacts and hot-load them.
+/// Convention: `contracts/<name>/build/release.wasm` → contract_id = `<name>`
+async fn load_wasm_contracts(executor: &mut qorvum_contracts::ContractExecutor) {
+    let contracts_dir = PathBuf::from("contracts");
+    if !contracts_dir.exists() {
+        return;
+    }
+    let entries = match std::fs::read_dir(&contracts_dir) {
+        Ok(e) => e,
+        Err(e) => { warn!("[gateway] Cannot scan contracts/: {}", e); return; }
+    };
+    for entry in entries.flatten() {
+        let wasm_path = entry.path().join("build").join("release.wasm");
+        if !wasm_path.is_file() {
+            continue;
+        }
+        let contract_id = entry.file_name().to_string_lossy().to_string();
+        match std::fs::read(&wasm_path) {
+            Ok(bytes) => {
+                info!("[gateway] Auto-loaded WASM contract '{}' ({} bytes)", contract_id, bytes.len());
+                executor.deploy_wasm(&contract_id, bytes);
+            }
+            Err(e) => warn!("[gateway] Failed to load WASM '{}': {}", contract_id, e),
+        }
+    }
+}
+
 use qorvum_consensus::ConsensusEngine;
 use qorvum_ledger::store::LedgerStore;
 
@@ -16,6 +43,7 @@ use crate::bus::NodeBus;
 pub struct GatewayRole {
     listen:         String,
     channel:        String,
+    data_dir:       String,
     ca_dir:         PathBuf,
     ca_passphrase:  Option<String>,
     store:          Arc<dyn LedgerStore>,
@@ -29,13 +57,14 @@ impl GatewayRole {
     pub fn new(
         listen:        String,
         channel:       String,
+        data_dir:      String,
         ca_dir:        PathBuf,
         ca_passphrase: Option<String>,
         store:         Arc<dyn LedgerStore>,
         bus:           NodeBus,
     ) -> Self {
         Self {
-            listen, channel, ca_dir, ca_passphrase, store,
+            listen, channel, data_dir, ca_dir, ca_passphrase, store,
             consensus: None,
             bus,
         }
@@ -55,6 +84,7 @@ impl GatewayRole {
 
         let mut app_state = qorvum_gateway::AppState::new_with_store(
             &self.channel,
+            &self.data_dir,
             self.store.clone(),
         );
 
@@ -75,8 +105,11 @@ impl GatewayRole {
             app_state.set_verifier(v);
         }
 
-        app_state.executor.write().await
-            .register_native("hr-service", hr_service::register());
+        {
+            let mut executor = app_state.executor.write().await;
+            executor.register_native("hr-service", hr_service::register());
+            load_wasm_contracts(&mut executor).await;
+        }
 
         // Wire peer topology updates → broadcaster node_status events
         let broadcaster = app_state.broadcaster.clone();
