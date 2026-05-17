@@ -2,6 +2,7 @@
 //! Uses RwLock<HashMap> per column family. For dev and testing ONLY.
 
 use crate::block::Block;
+use crate::delta::{delta_prefix, RecordDelta};
 use crate::error::LedgerError;
 use crate::record::Record;
 use crate::store::{LedgerStore, RecordOp};
@@ -15,6 +16,7 @@ struct Inner {
     block_store:  BTreeMap<u64, String>,       // block_num → JSON(Block)
     tx_index:     BTreeMap<[u8; 32], u64>,     // tx_id → block_num
     history_idx:  BTreeMap<String, u64>,       // "col~id~ver" → block_num
+    delta_store:  BTreeMap<String, String>,    // "col~id~{ver:016x}" → JSON(RecordDelta)
 }
 
 pub struct MemoryStore {
@@ -30,6 +32,7 @@ impl MemoryStore {
                 block_store:   BTreeMap::new(),
                 tx_index:      BTreeMap::new(),
                 history_idx:   BTreeMap::new(),
+                delta_store:   BTreeMap::new(),
             }),
         }
     }
@@ -182,11 +185,20 @@ impl LedgerStore for MemoryStore {
         for op in record_ops {
             match op {
                 RecordOp::Put(record) => {
+                    // Compute delta against previous world state (held under same lock).
+                    let prev: Option<Record> = inner.world_state.get(&record.composite_key())
+                        .and_then(|j| serde_json::from_str(j).ok());
+                    let delta = RecordDelta::compute(prev.as_ref(), &record);
+                    let delta_json = serde_json::to_string(&delta)
+                        .map_err(|e| LedgerError::SerializationError(e.to_string()))?;
+                    inner.delta_store.insert(delta.storage_key(), delta_json);
+
                     // History index
-                    let hist_key = format!("{}~{}~{:020}", 
+                    let hist_key = format!("{}~{}~{:020}",
                         record.meta.collection, record.meta.id, record.meta.version);
                     inner.history_idx.insert(hist_key, block.header.block_number);
-                    // World state
+
+                    // World state (full record for fast current-state reads)
                     let json = serde_json::to_string(&record)
                         .map_err(|e| LedgerError::SerializationError(e.to_string()))?;
                     inner.world_state.insert(record.composite_key(), json);
@@ -197,6 +209,33 @@ impl LedgerStore for MemoryStore {
             }
         }
         Ok(())
+    }
+
+    // ── Delta store ───────────────────────────────────────────────────────────
+
+    fn put_delta(&self, delta: &RecordDelta) -> Result<(), LedgerError> {
+        let mut inner = self.inner.write()
+            .map_err(|_| LedgerError::StorageError("lock poisoned".into()))?;
+        let json = serde_json::to_string(delta)
+            .map_err(|e| LedgerError::SerializationError(e.to_string()))?;
+        inner.delta_store.insert(delta.storage_key(), json);
+        Ok(())
+    }
+
+    fn get_deltas(&self, collection: &str, id: &str)
+        -> Result<Vec<RecordDelta>, LedgerError>
+    {
+        let inner = self.inner.read()
+            .map_err(|_| LedgerError::StorageError("lock poisoned".into()))?;
+        let prefix = delta_prefix(collection, id);
+        let mut results = Vec::new();
+        for (k, v) in inner.delta_store.range(prefix.clone()..) {
+            if !k.starts_with(&prefix) { break; }
+            let delta: RecordDelta = serde_json::from_str(v)
+                .map_err(|e| LedgerError::SerializationError(e.to_string()))?;
+            results.push(delta);
+        }
+        Ok(results)
     }
 }
 

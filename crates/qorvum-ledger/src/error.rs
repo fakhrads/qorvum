@@ -14,4 +14,8 @@ pub enum LedgerError {
     SerializationError(String),
     #[error("Block error: {0}")]
     BlockError(String),
+    #[error("Delta computation error: {0}")]
+    DeltaError(String),
+    #[error("Delta hash mismatch — integrity check failed")]
+    HashMismatch,
 }

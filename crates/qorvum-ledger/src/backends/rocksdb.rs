@@ -1,5 +1,5 @@
 //! RocksDB persistent storage backend.
-//! Uses 5 column families so each namespace is isolated and prefix-scannable.
+//! Uses 6 column families so each namespace is isolated and prefix-scannable.
 //!
 //! Column Families:
 //!   CF_WORLD    — "world_state"   : key(collection~partition~id) → JSON(Record)
@@ -7,8 +7,10 @@
 //!   CF_BLOCKS   — "block_store"   : big-endian u64(block_num) → JSON(Block)
 //!   CF_TX       — "tx_index"      : hex(tx_id[32]) → big-endian u64(block_num)
 //!   CF_HISTORY  — "history_idx"   : "col~id~{:020}" → big-endian u64(block_num)
+//!   CF_DELTA    — "delta_store"   : "col~id~{:016x}" → JSON(RecordDelta)
 
 use crate::block::Block;
+use crate::delta::{delta_prefix, RecordDelta};
 use crate::error::LedgerError;
 use crate::record::Record;
 use crate::store::{LedgerStore, RecordOp};
@@ -21,6 +23,7 @@ const CF_IDX:     &str = "secondary_idx";
 const CF_BLOCKS:  &str = "block_store";
 const CF_TX:      &str = "tx_index";
 const CF_HISTORY: &str = "history_idx";
+const CF_DELTA:   &str = "delta_store";
 
 pub struct RocksDbStore {
     db: DB,
@@ -33,7 +36,7 @@ impl RocksDbStore {
         opts.create_if_missing(true);
         opts.create_missing_column_families(true);
 
-        let cf_names = [CF_WORLD, CF_IDX, CF_BLOCKS, CF_TX, CF_HISTORY];
+        let cf_names = [CF_WORLD, CF_IDX, CF_BLOCKS, CF_TX, CF_HISTORY, CF_DELTA];
         let cf_descriptors: Vec<ColumnFamilyDescriptor> = cf_names
             .iter()
             .map(|&name| ColumnFamilyDescriptor::new(name, Options::default()))
@@ -65,6 +68,10 @@ impl RocksDbStore {
 
     fn cf_history(&self) -> &rocksdb::ColumnFamily {
         self.db.cf_handle(CF_HISTORY).expect("CF history_idx missing")
+    }
+
+    fn cf_delta(&self) -> &rocksdb::ColumnFamily {
+        self.db.cf_handle(CF_DELTA).expect("CF delta_store missing")
     }
 
     fn encode_block_num(n: u64) -> [u8; 8] {
@@ -282,10 +289,23 @@ impl LedgerStore for RocksDbStore {
             batch.put_cf(self.cf_tx(), tx_key.as_bytes(), &block_num_bytes);
         }
 
-        // Apply world state + history changes
+        // Apply world state + history + delta changes
         for op in record_ops {
             match op {
                 RecordOp::Put(record) => {
+                    // Read previous version for delta computation (outside the batch).
+                    let prev: Option<Record> = match self.db
+                        .get_cf(self.cf_world(), record.composite_key().as_bytes())
+                        .map_err(|e| LedgerError::StorageError(e.to_string()))?
+                    {
+                        Some(bytes) => serde_json::from_slice(&bytes).ok(),
+                        None => None,
+                    };
+                    let delta = RecordDelta::compute(prev.as_ref(), &record);
+                    let delta_json = serde_json::to_vec(&delta)
+                        .map_err(|e| LedgerError::SerializationError(e.to_string()))?;
+                    batch.put_cf(self.cf_delta(), delta.storage_key().as_bytes(), &delta_json);
+
                     // History entry
                     let hist_key = Self::history_key(
                         &record.meta.collection, &record.meta.id, record.meta.version,
@@ -293,7 +313,7 @@ impl LedgerStore for RocksDbStore {
                     let block_num_bytes = Self::encode_block_num(block.header.block_number);
                     batch.put_cf(self.cf_history(), hist_key.as_bytes(), &block_num_bytes);
 
-                    // World state entry
+                    // World state entry (full record for fast current-state reads)
                     let record_json = serde_json::to_vec(&record)
                         .map_err(|e| LedgerError::SerializationError(e.to_string()))?;
                     batch.put_cf(self.cf_world(), record.composite_key().as_bytes(), &record_json);
@@ -307,5 +327,32 @@ impl LedgerStore for RocksDbStore {
         // Flush the entire batch atomically
         self.db.write(batch)
             .map_err(|e| LedgerError::StorageError(e.to_string()))
+    }
+
+    // ── Delta store ───────────────────────────────────────────────────────────
+
+    fn put_delta(&self, delta: &RecordDelta) -> Result<(), LedgerError> {
+        let json = serde_json::to_vec(delta)
+            .map_err(|e| LedgerError::SerializationError(e.to_string()))?;
+        self.db.put_cf(self.cf_delta(), delta.storage_key().as_bytes(), &json)
+            .map_err(|e| LedgerError::StorageError(e.to_string()))
+    }
+
+    fn get_deltas(&self, collection: &str, id: &str)
+        -> Result<Vec<RecordDelta>, LedgerError>
+    {
+        let prefix = delta_prefix(collection, id);
+        let iter = self.db.prefix_iterator_cf(self.cf_delta(), prefix.as_bytes());
+        let mut results = Vec::new();
+        for item in iter {
+            let (k, v) = item.map_err(|e| LedgerError::StorageError(e.to_string()))?;
+            let key_str = std::str::from_utf8(&k)
+                .map_err(|_| LedgerError::StorageError("invalid UTF-8 key".into()))?;
+            if !key_str.starts_with(&prefix) { break; }
+            let delta: RecordDelta = serde_json::from_slice(&v)
+                .map_err(|e| LedgerError::SerializationError(e.to_string()))?;
+            results.push(delta);
+        }
+        Ok(results)
     }
 }

@@ -134,8 +134,9 @@ fn ledger_err(e: qorvum_ledger::LedgerError) -> ChainError {
         NotFound(s)           => ChainError::NotFound(s),
         AlreadyExists(s)      => ChainError::AlreadyExists(s),
         ValidationFailed(s)   => ChainError::ValidationFailed(s),
-        StorageError(s) | SerializationError(s) | BlockError(s)
+        StorageError(s) | SerializationError(s) | BlockError(s) | DeltaError(s)
                               => ChainError::InternalError(s),
+        HashMismatch          => ChainError::InternalError("delta hash mismatch".into()),
     }
 }
 
